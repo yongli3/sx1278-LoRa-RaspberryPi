@@ -77,6 +77,7 @@ typedef enum SpreadingFactor{
     SF12 = 12<<4,
 } SpreadingFactor;
 
+// CR5 faster than CR8
 typedef enum ErrorCodingRate{
     CR5 = 1<<1,
     CR6 = 2<<1,

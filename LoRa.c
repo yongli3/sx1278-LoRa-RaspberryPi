@@ -1,6 +1,9 @@
 #include "LoRa.h"
 
 int LoRa_begin(LoRa_ctl *modem){
+
+    unsigned char RegVersion = 0;
+    
     if (gpioInitialise() < 0)
     {
         printf("Pigpio init error\n");
@@ -9,9 +12,15 @@ int LoRa_begin(LoRa_ctl *modem){
     
     lora_reset(modem->eth.resetGpioN);
     
-    if( (modem->spid = spiOpen(modem->spiCS, 32000, 0))<0 )
+    if( (modem->spid = spiOpen(modem->spiCS, 320000, 0))<0 )
         return modem->spid;
-    
+
+    RegVersion = lora_reg_read_byte(modem->spid, 0x42);
+    if (RegVersion != 0x12) {
+        printf("Version %x incorrect!\n", RegVersion);
+        return -1;
+    }
+
     lora_set_lora_mode(modem->spid);
     
     if(modem->eth.implicitHeader){
@@ -105,7 +114,7 @@ void lora_set_dio_rx_mapping(int spid){
 }
 
 void lora_set_dio_tx_mapping(int spid){
-    lora_reg_write_byte(spid, REG_DIO_MAPPING_1, 1<<6);
+    lora_reg_write_byte(spid, REG_DIO_MAPPING_1, 1<<6); // =01000000
 }
 
 void lora_set_rxdone_dioISR(int gpio_n, rxDoneISR func, LoRa_ctl *modem){
@@ -366,6 +375,8 @@ void lora_reset(unsigned char gpio_n){
     usleep(100);
     gpioWrite(gpio_n, 1);
     usleep(5000);
+
+    printf("reset using %d\n", gpio_n);
 }
 
 void lora_reset_irq_flags(int spid){
