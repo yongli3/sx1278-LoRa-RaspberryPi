@@ -16,7 +16,7 @@ rx_explicit_example.o: rx_explicit_example.c
 	gcc -c rx_explicit_example.c -o rx_explicit_example.o -lpigpio -lrt -pthread -lm
 
 transmit_explicit: LoRa.o tx_explicit_example.o
-	gcc -o transmit_explicit tx_explicit_example.o LoRa.o -lpigpio -lrt -pthread -lm -lsqlite3
+	gcc -o transmit_explicit tx_explicit_example.o LoRa.o -lpigpio -lrt -pthread -lm -lsqlite3 -lmosquitto
 
 transmit_implicit: LoRa.o tx_implicit_example.o
 	gcc -o transmit_implicit tx_implicit_example.o LoRa.o -lpigpio -lrt -pthread -lm

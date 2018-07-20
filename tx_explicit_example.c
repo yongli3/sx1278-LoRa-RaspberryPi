@@ -39,6 +39,79 @@ static void message_callback(struct mosquitto *mosq, void *obj, const struct mos
     }
 }
 
+static void mosq_log_callback(struct mosquitto *mosq, void *userdata, int level, const char *str)
+{
+    /* Pring all log messages regardless of level. */
+  
+  switch(level){
+    case MOSQ_LOG_DEBUG:
+    case MOSQ_LOG_INFO:
+    case MOSQ_LOG_NOTICE:
+    case MOSQ_LOG_WARNING:
+    case MOSQ_LOG_ERR: {
+      printf("level=%i:%s\n", level, str);
+    }
+  }
+}
+
+static int mqtt_test()
+{
+    char msg[256];
+    char clientid[24];
+    struct mosquitto *mosq = NULL;
+    int ret = 0;
+
+    mosquitto_lib_init();
+
+    memset(clientid, 0, sizeof(clientid));
+    snprintf(clientid, sizeof(clientid) - 1, "mysql_log_%d", getpid());
+
+    mosq = mosquitto_new(clientid, true, 0);
+
+    if (mosq) {
+        mosquitto_log_callback_set(mosq, mosq_log_callback);
+        mosquitto_connect_callback_set(mosq, connect_callback);
+        mosquitto_message_callback_set(mosq, message_callback);
+    
+        ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
+
+        if (ret) {
+            printf("connect error!\n");
+        }
+
+
+        ret = mosquitto_loop_start(mosq);
+        if (ret != MOSQ_ERR_SUCCESS) {
+            printf("LOOP fail!\n");
+        }
+
+        while (1) {        
+            sprintf(msg, "%d\n", current_timestamp());
+            //mosquitto_subscribe(mosq, NULL, "/devices/wb-adc/controls/+", 0);
+            mosquitto_publish(mosq, NULL, "testtopic", strlen(msg), msg, 0, 0);
+            break;
+            usleep(1000*1000);
+        }
+#if 0
+        while (true) {
+            ret = mosquitto_loop(mosq, -1, 1);
+            if(ret){
+                printf("connection error!\n");
+                sleep(10);
+                mosquitto_reconnect(mosq);
+            }
+        }
+#endif    
+    mosquitto_destroy(mosq);
+    } else {
+        printf("mosq new fail!\n");
+    }
+
+    mosquitto_lib_cleanup();
+
+    return 0;
+}
+
 static int callbackInsert(void *NotUsed, int argc, char **argv, char **colName) {
     printf("+%s\n", __func__);
     return 0;
@@ -155,6 +228,9 @@ int main() {
     char *errMsg = NULL;
     sqlite3_mutex* mutex;
     char sqlString[256];
+
+    mqtt_test();
+    return 0;
 
     ret = sqlite3_open(DB_NAME, &db);
 
