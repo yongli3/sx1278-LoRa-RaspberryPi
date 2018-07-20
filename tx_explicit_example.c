@@ -1,10 +1,185 @@
 #include "LoRa.h"
+#include<pthread.h>
+#include <sys/time.h>
+#include <sqlite3.h>
+#include <mosquitto.h>
 
-void tx_f(txData *tx){
-printf("tx done %u\n", (unsigned)time(NULL));
+#define MQTT_HOST "localhost"
+#define MQTT_PORT 1883
 
+#define DB_NAME  "rawdata.db"
+
+sqlite3 *db = NULL;
+
+static long long current_timestamp() {
+    struct timeval te; 
+    gettimeofday(&te, NULL); // get current time
+    long long milliseconds = te.tv_sec*1000*1000LL + te.tv_usec; // calculate microseconds
+    //printf("%lld\n", te.tv_usec);
+    return milliseconds;
 }
 
+void tx_f(txData *tx){
+    printf("tx done %u\n", (unsigned)time(NULL));
+}
+
+static void connect_callback(struct mosquitto *mosq, void *obj, int result)
+{
+    printf("connect callback, rc=%d\n", result);
+}
+
+static void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message)
+{
+    bool match = 0;
+    printf("got message '%.*s' for topic '%s'\n", message->payloadlen, (char*) message->payload, message->topic);
+
+    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic, &match);
+    if (match) {
+        printf("got message for ADC topic\n");
+    }
+}
+
+static int callbackInsert(void *NotUsed, int argc, char **argv, char **colName) {
+    printf("+%s\n", __func__);
+    return 0;
+}
+
+static int callbackSelect(void *NotUsed, int argc, char **argv, char **colName) {
+    char sqlString[256];
+     char *errMsg = NULL;
+     int ret = -1;
+    int i;
+    //argc= column number argv=column value
+    printf("+%s argc=%d ID=%s\n", __func__, argc, argv[0]);
+
+    // send this record to MQTT server, and set local = 0
+
+
+    sqlite3_mutex_enter(sqlite3_db_mutex(db));    
+    sprintf(sqlString, "UPDATE raw set %s = 0;", colName[3]);
+        ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
+        if( ret != SQLITE_OK)
+                {
+                    printf("Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
+                    return -1;
+                } 
+                else
+                {
+                    printf("[%s] okay!\n", sqlString);
+                }
+
+    
+    sqlite3_mutex_leave(sqlite3_db_mutex(db));
+
+#if 0
+    for (i = 0; i < argc; i++) {
+        printf("%d:%s-%s\n", i, argv[i], colName[i]);
+    }
+#endif    
+    //argv[0]; colName[0]
+    //UPDATE tblStuff SET name = 'Temperature10' WHERE name = 'Temperature1'
+
+    return 0;
+}
+
+void *threadFun1(void *ptr)
+{
+    char sqlString[256];
+    char *errMsg = NULL;
+    int ret = -1;
+
+    int type = (int) ptr;
+    fprintf(stderr,"Thread1 - %d\n",type);
+
+while (1) {
+    sqlite3_mutex_enter(sqlite3_db_mutex(db));
+    // Perform some queries on the database
+    sprintf(sqlString, "INSERT INTO raw(time, message, local) VALUES ('%llu','%s', 1);",
+                                                            current_timestamp(), "lora");
+        ret = sqlite3_exec(db, sqlString, callbackInsert, NULL, &errMsg);
+        if( ret != SQLITE_OK)
+                {
+                    printf("Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
+                } 
+                else
+                {
+                    printf("[%s] okay!\n", sqlString);
+                }
+
+    
+    sqlite3_mutex_leave(sqlite3_db_mutex(db));
+    usleep(1000000);
+}   
+    return  ptr;
+}
+
+void *threadFun2(void *ptr)
+{
+    char sqlString[256];
+     int ret = -1;
+     char *errMsg = NULL;
+    int type = (int) ptr;
+    fprintf(stderr,"Thread2 - %d\n",type);
+
+while (1) {
+    sqlite3_mutex_enter(sqlite3_db_mutex(db));
+    // Perform some queries on the database
+    // query all local=1; send out and set local=0
+    sprintf(sqlString, "SELECT * from raw where local=1;");
+        ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
+        if( ret != SQLITE_OK)
+                {
+                    printf("Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
+                } 
+                else
+                {
+                    printf("[%s] okay!\n", sqlString);
+                }
+
+    
+    sqlite3_mutex_leave(sqlite3_db_mutex(db));
+    usleep(1000);
+}    
+    return  ptr;
+}
+
+#if 1
+int main() {
+//create a thread for sqlite reading, and publish to mqtt
+// create a thread for lora data RX, and write to local sqlite
+
+    int ret = 0;
+    pthread_t thread1, thread2;
+    int thr = 1;
+    int thr2 = 2;
+    char *errMsg = NULL;
+    sqlite3_mutex* mutex;
+    char sqlString[256];
+
+    ret = sqlite3_open(DB_NAME, &db);
+
+        if( ret != SQLITE_OK)
+        {
+            printf("Can't open database: %s\n", sqlite3_errmsg(db));
+            return -1;
+        } 
+        else
+        {
+            printf("Open database successfully\n");
+        }
+        // insert into raw (time, message) values(2, "aa");
+
+    // start the threads
+    pthread_create(&thread1, NULL, *threadFun1, (void *) thr);
+    pthread_create(&thread2, NULL, *threadFun2, (void *) thr2);
+    // wait for threads to finish
+    pthread_join(thread1,NULL);
+    pthread_join(thread2,NULL);
+
+    sqlite3_close(db);
+    return 0;
+}
+#else
 int main(){
 
 char txbuf[128];
@@ -66,3 +241,4 @@ printf("end\n");
 
 LoRa_end(&modem);
 }
+#endif
