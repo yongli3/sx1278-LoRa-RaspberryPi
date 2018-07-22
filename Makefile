@@ -1,7 +1,7 @@
 all: receive_implicit receive_explicit transmit_implicit transmit_explicit
 
 LoRa.o: LoRa.c
-	gcc -c LoRa.c -o LoRa.o -lpigpio -lrt -pthread -lm 
+	gcc -c LoRa.c -o LoRa.o -lpigpio -lrt -pthread -lm
 
 tx_implicit_example.o: tx_implicit_example.c
 	gcc -c tx_implicit_example.c -o tx_implicit_example.o -lpigpio -lrt -pthread -lm

@@ -49,7 +49,7 @@ static void mosq_log_callback(struct mosquitto *mosq, void *userdata, int level,
     case MOSQ_LOG_NOTICE:
     case MOSQ_LOG_WARNING:
     case MOSQ_LOG_ERR: {
-      printf("level=%i:%s\n", level, str);
+      printf("%s level=%i:[%s]\n", __func__, level, str);
     }
   }
 }
@@ -64,7 +64,7 @@ static int mqtt_test()
     mosquitto_lib_init();
 
     memset(clientid, 0, sizeof(clientid));
-    snprintf(clientid, sizeof(clientid) - 1, "mysql_log_%d", getpid());
+    snprintf(clientid, sizeof(clientid) - 1, "clientid_%d", getpid());
 
     mosq = mosquitto_new(clientid, true, 0);
 
