@@ -1,10 +1,16 @@
 #include "LoRa.h"
+#include <fcntl.h>
+#include <termios.h>
+#include <errno.h>
+#include <string.h>
 #include<pthread.h>
 #include <sys/time.h>
 #include <sqlite3.h>
 #include <mosquitto.h>
+#include <string.h>
+#include <syslog.h>
 
-#define MQTT_HOST "localhost"
+#define MQTT_HOST "202.120.26.119"
 #define MQTT_PORT 1883
 
 #define DB_NAME  "rawdata.db"
@@ -54,13 +60,15 @@ static void mosq_log_callback(struct mosquitto *mosq, void *userdata, int level,
   }
 }
 
-static int mqtt_test()
+static int mqtt_test(char *topic, char *message)
 {
     char msg[256];
     char clientid[24];
     struct mosquitto *mosq = NULL;
     int ret = 0;
 
+    printf("%s %s-%s\n", __func__, topic, message);
+    
     mosquitto_lib_init();
 
     memset(clientid, 0, sizeof(clientid));
@@ -76,21 +84,23 @@ static int mqtt_test()
         ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
 
         if (ret) {
-            printf("connect error!\n");
+            syslog(LOG_ERR, "MQTT %s connect error!\n", MQTT_HOST);
+			return -1;
         }
-
 
         ret = mosquitto_loop_start(mosq);
         if (ret != MOSQ_ERR_SUCCESS) {
-            printf("LOOP fail!\n");
+            syslog(LOG_ERR, "LOOP fail!\n");
         }
 
-        while (1) {        
-            sprintf(msg, "%d\n", current_timestamp());
+        //while (1) 
+        {        
+            //sprintf(message, "%s-%d\n", message, current_timestamp());
+            printf("message=[%s] len=%d size=%d\n", message, strlen(message), sizeof(message));
             //mosquitto_subscribe(mosq, NULL, "/devices/wb-adc/controls/+", 0);
-            mosquitto_publish(mosq, NULL, "testtopic", strlen(msg), msg, 0, 0);
-            break;
-            usleep(1000*1000);
+            mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
+            //break;
+            //usleep(1000*1000);
         }
 #if 0
         while (true) {
@@ -104,10 +114,12 @@ static int mqtt_test()
 #endif    
     mosquitto_destroy(mosq);
     } else {
-        printf("mosq new fail!\n");
+        syslog(LOG_ERR, "mosq new fail!\n");
     }
 
     mosquitto_lib_cleanup();
+
+	syslog(LOG_NOTICE, "publish message %s okay!\n", message);
 
     return 0;
 }
@@ -216,6 +228,438 @@ while (1) {
     return  ptr;
 }
 
+static int set_interface_attribs (int fd, int speed, int parity)
+{
+        struct termios tty;
+        memset (&tty, 0, sizeof tty);
+        if (tcgetattr (fd, &tty) != 0)
+        {
+                printf("error %d from tcgetattr", errno);
+                return -1;
+        }
+
+        cfsetospeed (&tty, speed);
+        cfsetispeed (&tty, speed);
+
+        tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;     // 8-bit chars
+        // disable IGNBRK for mismatched speed tests; otherwise receive break
+        // as \000 chars
+        tty.c_iflag &= ~IGNBRK;         // disable break processing
+        tty.c_lflag = 0;                // no signaling chars, no echo,
+                                        // no canonical processing
+        tty.c_oflag = 0;                // no remapping, no delays
+        tty.c_cc[VMIN]  = 0;            // read doesn't block
+        tty.c_cc[VTIME] = 5;            // 0.5 seconds read timeout
+
+        tty.c_iflag &= ~(IXON | IXOFF | IXANY); // shut off xon/xoff ctrl
+
+        tty.c_cflag |= (CLOCAL | CREAD);// ignore modem controls,
+                                        // enable reading
+        tty.c_cflag &= ~(PARENB | PARODD);      // shut off parity
+        tty.c_cflag |= parity;
+        tty.c_cflag &= ~CSTOPB;
+        tty.c_cflag &= ~CRTSCTS;
+
+        if (tcsetattr (fd, TCSANOW, &tty) != 0)
+        {
+                printf ("error %d from tcsetattr", errno);
+                return -1;
+        }
+        return 0;
+}
+
+static void set_blocking (int fd, int should_block)
+{
+        struct termios tty;
+        memset (&tty, 0, sizeof tty);
+        if (tcgetattr (fd, &tty) != 0)
+        {
+                printf ("error %d from tggetattr", errno);
+                return;
+        }
+
+        tty.c_cc[VMIN]  = should_block ? 1 : 0;
+        tty.c_cc[VTIME] = 10;            // 0.5 seconds read timeout
+
+        if (tcsetattr (fd, TCSANOW, &tty) != 0)
+                printf ("error %d setting term attributes", errno);
+}
+
+static int uart_test2()
+{
+    int ret = 0;
+    int i = 0;
+    int size = 0;
+    int repeat_count = 0;
+    char write_buffer[256];
+    char read_buffer[256];
+    char mqtt_message[256];
+	char hostname[255];
+    char *portname = "/dev/ttyUSB0";
+
+	//LOG_ERR
+
+	
+    int fd = open (portname, O_RDWR | O_NOCTTY | O_SYNC);
+    if (fd < 0)
+    {
+   		syslog(LOG_ERR, "error %d opening %s: %s", errno, portname, strerror (errno));
+		
+			system("reboot");
+            return -1;
+    }
+    
+    set_interface_attribs (fd, B115200, 0);  // set speed to 115,200 bps, 8n1 (no parity)
+    set_blocking (fd, 0);                // set no blocking
+    
+    while (0)
+    {
+    write (fd, "ATE0\r\n", 7);           // send 7 character greeting
+    
+    //sleep(1);
+    usleep ((7 + 25) * 1000);             // sleep enough to transmit the 7 plus
+                                         // receive 25:  approx 100 uS per char transmit
+    char buf [100];
+    
+    memset(buf, 0, sizeof(buf));
+    
+    int n = read(fd, buf, sizeof(buf));  // read up to 100 characters if ready to read
+    
+    printf("read %d buf=%s\n", n, buf);
+    sleep(1);
+    }
+
+    while (1) {
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "ATE0\r\n");
+    size = write(fd,write_buffer,strlen(write_buffer));
+    tcflush(fd, TCIOFLUSH);
+    printf("write %s %d\n", write_buffer, size);
+    //usleep (size * 1000);
+    sleep(1);
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    printf("read %d [%s]\n", size, read_buffer);
+
+    //for (i = 0; i < size; i++)
+       //printf("%x\n", read_buffer[i]);
+
+    if (strstr(read_buffer, "OK")) {
+        printf("Modem OK\n");
+        break;
+    } else {
+        if (repeat_count > 5) {
+            syslog(LOG_ERR, "MODEM ATE0 fail!\n");
+            goto cleanup;
+        }
+    };
+    repeat_count++;
+    sleep(1);
+}
+
+memset(write_buffer, 0, sizeof(write_buffer));
+sprintf(write_buffer, "%s", "AT+CFUN=0\r\n");
+size = write(fd,write_buffer,strlen(write_buffer));
+tcflush(fd, TCOFLUSH);
+printf("write %s %d\n", write_buffer, size);
+sleep(4);
+memset(read_buffer, 0, sizeof(read_buffer));
+size = read(fd, read_buffer, sizeof(read_buffer));
+printf("read %d [%s]\n", size, read_buffer);    
+if (NULL == strstr(read_buffer, "OK")) {
+    syslog(LOG_ERR, "command %s error !\n", write_buffer);
+    goto cleanup;
+};
+
+memset(write_buffer, 0, sizeof(write_buffer));
+sprintf(write_buffer, "%s", "AT+CFUN=1\r\n");
+size = write(fd,write_buffer,strlen(write_buffer));
+tcflush(fd, TCOFLUSH);
+printf("write %s %d\n", write_buffer, size);
+sleep(7);
+memset(read_buffer, 0, sizeof(read_buffer));
+size = read(fd, read_buffer, sizeof(read_buffer));
+printf("read %d [%s]\n", size, read_buffer);    
+if (NULL == strstr(read_buffer, "OK")) {
+    syslog(LOG_ERR, "command %s error !\n", write_buffer);
+    goto cleanup;
+};
+
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+CGACT=1,1\r\n");
+    tcflush(fd, TCOFLUSH);
+    size = write(fd,write_buffer,strlen(write_buffer));
+    printf("write %s %d\n", write_buffer, size);
+    sleep(7);
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    printf("read %d [%s]\n", size, read_buffer);    
+    if (NULL == strstr(read_buffer, "OK")) {
+        syslog(LOG_ERR, "command %s error !\n", write_buffer);
+        goto cleanup;
+    };
+
+    // +ZGIPDNS: 1,1,"IP","10.101.206.237","0.0.0.0","116.116.116.116","221.5.88.88"
+    strcpy(mqtt_message, read_buffer);
+
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+ZGACT=1,1\r\n");
+    size = write(fd,write_buffer,strlen(write_buffer));
+    tcflush(fd, TCOFLUSH);
+    printf("write %s %d\n", write_buffer, size);
+    sleep(7);
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    printf("read %d [%s]\n", size, read_buffer);    
+
+
+    if (NULL == strstr(read_buffer, "OK")) {
+        syslog(LOG_ERR, "command %s error !\n", write_buffer);
+        goto cleanup;
+    }
+
+        ret = system("ifconfig eth0 down");
+    printf("system return %d\n", ret);
+    
+    ret = system("udhcpc -i eth1");
+    printf("system return %d\n", ret);
+
+	gethostname(hostname, sizeof(hostname));
+
+	printf("hostname=%s\n", hostname);
+
+	sprintf(hostname, "%s-network", hostname);
+
+	system("systemctl restart systemd-timesyncd.service");
+	
+// publish IPDNS to mqtt
+	syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
+    ret = mqtt_test(hostname, mqtt_message);
+	if (ret)
+		goto cleanup;
+	
+	while (1) {
+		sleep(90);
+		printf("Checking network ...\n");
+		// check if internet is okay
+		
+		ret = system("ping 114.114.114.114 -c 1");
+		if (ret) {
+			syslog(LOG_ERR, "network error!\n");
+			break;
+		}
+
+		syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
+    	ret = mqtt_test(hostname, mqtt_message);
+		if (ret) {
+			syslog(LOG_ERR, "MQTT error!\n");
+			break;
+		}
+	}    
+cleanup:    
+    close(fd);
+
+
+
+    return 0;
+}
+
+#if 0
+static int uart_test()
+{
+    struct termios SerialPortSettings;
+    int fd = -1;
+    int ret = -1;
+    int size = 0;
+    int i = 0;
+    int repeat_count = 0;
+    char write_buffer[256];
+    char read_buffer[256];
+
+    fd = open("/dev/ttyUSB0", O_RDWR| O_NOCTTY|O_SYNC);
+
+    if (fd == -1) {
+        printf("uart open error! %s\n", strerror(errno));
+        return -1;
+    }
+
+    ret = tcgetattr(fd, &SerialPortSettings);
+    if (ret) {
+        printf("%s\n", strerror(errno));
+        goto cleanup;
+    }
+
+    cfsetispeed(&SerialPortSettings, B9600);
+    cfsetospeed(&SerialPortSettings, B9600);
+
+#if 1
+    SerialPortSettings.c_cflag &= ~PARENB;   /* Disables the Parity Enable bit(PARENB),So No Parity   */
+		SerialPortSettings.c_cflag &= ~CSTOPB;   /* CSTOPB = 2 Stop bits,here it is cleared so 1 Stop bit */
+		SerialPortSettings.c_cflag &= ~CSIZE;	 /* Clears the mask for setting the data size             */
+		SerialPortSettings.c_cflag |=  CS8;      /* Set the data bits = 8                                 */
+	
+		SerialPortSettings.c_cflag &= ~CRTSCTS;       /* No Hardware flow Control                         */
+		SerialPortSettings.c_cflag |= CREAD | CLOCAL; /* Enable receiver,Ignore Modem Control lines       */ 
+		
+		
+		SerialPortSettings.c_iflag &= ~(IXON | IXOFF | IXANY);          /* Disable XON/XOFF flow control both i/p and o/p */
+		SerialPortSettings.c_iflag &= ~(ICANON | ECHO | ECHOE | ISIG);  /* Non Cannonical mode                            */
+
+		SerialPortSettings.c_oflag &= ~OPOST;/*No Output Processing*/
+#endif
+		/* Setting Time outs */
+		SerialPortSettings.c_cc[VMIN] = 1; /* Read at least 10 characters */
+		SerialPortSettings.c_cc[VTIME] = 0; /* Wait indefinetly   */
+
+		if((tcsetattr(fd,TCSANOW,&SerialPortSettings)) != 0) /* Set the attributes to the termios structure*/ {
+		    printf("\n  ERROR ! in Setting attributes");
+            goto cleanup;
+        }
+
+#if 0
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    printf("read %d [%s]\n", size, read_buffer);
+            for (i = 0; i < size; i++)
+                printf("%x\n", read_buffer[i]);
+    tcflush(fd, TCIOFLUSH);
+    // cleanup modem
+#endif    
+    repeat_count = 0;
+    while (1) {
+#if 0
+        while (1) 
+       {
+        memset(write_buffer, 0, sizeof(write_buffer));
+        sprintf(write_buffer, "%s", "AT\r\n");
+        size = write(fd,write_buffer,strlen(write_buffer));
+        sleep(1);
+        tcflush(fd, TCOFLUSH);
+        printf("write %s %d\n", write_buffer, size);
+        //usleep (size * 1000);
+        sleep(1);
+        memset(read_buffer, 0, sizeof(read_buffer));
+        size = read(fd, read_buffer, sizeof(read_buffer));
+        printf("read %d [%s]\n", size, read_buffer);
+
+        }
+#endif        
+        memset(write_buffer, 0, sizeof(write_buffer));
+        sprintf(write_buffer, "%s", "ATE0\r\n");
+        size = write(fd,write_buffer,strlen(write_buffer));
+        tcflush(fd, TCIOFLUSH);
+        printf("write %s %d\n", write_buffer, size);
+        //usleep (size * 1000);
+        sleep(1);
+        memset(read_buffer, 0, sizeof(read_buffer));
+        size = read(fd, read_buffer, sizeof(read_buffer));
+        printf("read %d [%s]\n", size, read_buffer);
+        for (i = 0; i < size; i++)
+            printf("%x\n", read_buffer[i]);
+       
+        if (strstr(read_buffer, "OK")) {
+            printf("Modem OK\n");
+            break;
+        } else {
+            if (repeat_count > 5) {
+                printf("MODEM ATE0 fail!\n");
+                goto cleanup;
+            }
+        };
+        repeat_count++;
+        sleep(1);
+    }
+
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+CFUN=0\r\n");
+    size = write(fd,write_buffer,strlen(write_buffer));
+    tcflush(fd, TCOFLUSH);
+    printf("write %s %d\n", write_buffer, size);
+    sleep(6);
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    printf("read %d [%s]\n", size, read_buffer);    
+    if (NULL == strstr(read_buffer, "OK")) {
+        printf("command error !\n");
+        goto cleanup;
+    };
+
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+CFUN=1\r\n");
+    size = write(fd,write_buffer,strlen(write_buffer));
+    tcflush(fd, TCOFLUSH);
+    printf("write %s %d\n", write_buffer, size);
+    sleep(6);
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    printf("read %d [%s]\n", size, read_buffer);    
+    if (NULL == strstr(read_buffer, "OK")) {
+        printf("command error !\n");
+        goto cleanup;
+    };
+#if 0
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+CGDCONT=1,\"IP\"\r\n");
+    size = write(fd,write_buffer,strlen(write_buffer));
+    printf("write %d\n", size);
+    sleep(5);
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    printf("read %d [%s]\n", size, read_buffer);    
+    if (NULL == strstr(read_buffer, "OK")) {
+        printf("command error !\n");
+        goto cleanup;
+    };
+#endif
+
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+CGACT=1,1\r\n");
+    tcflush(fd, TCOFLUSH);
+    size = write(fd,write_buffer,strlen(write_buffer));
+    printf("write %s %d\n", write_buffer, size);
+    sleep(5);
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    printf("read %d [%s]\n", size, read_buffer);    
+    if (NULL == strstr(read_buffer, "OK")) {
+        printf("command error !\n");
+        goto cleanup;
+    };
+
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+ZGACT=1,1\r\n");
+    size = write(fd,write_buffer,strlen(write_buffer));
+    tcflush(fd, TCOFLUSH);
+    printf("write %s %d\n", write_buffer, size);
+    sleep(5);
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    printf("read %d [%s]\n", size, read_buffer);    
+
+    // push the buffer to mqtt
+
+// +ZGIPDNS: 1,1,"IP","10.101.206.237","0.0.0.0","116.116.116.116","221.5.88.88"
+
+    if (NULL == strstr(read_buffer, "OK")) {
+        printf("command error !\n");
+        goto cleanup;
+    };
+
+        ret = system("ifconfig eth0 down");
+    printf("system return %d\n", ret);
+    
+    ret = system("udhcpc -i eth1");
+    printf("system return %d\n", ret);
+
+    
+
+cleanup:
+    close(fd);
+    return ret;
+}
+
+#endif
+
 #if 1
 int main() {
 //create a thread for sqlite reading, and publish to mqtt
@@ -229,7 +673,14 @@ int main() {
     sqlite3_mutex* mutex;
     char sqlString[256];
 
-    mqtt_test();
+	openlog("4G", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
+
+	syslog(LOG_NOTICE, "version %s", __DATE__);
+
+    uart_test2();
+    return 0;
+
+    mqtt_test("topic", "message");
     return 0;
 
     ret = sqlite3_open(DB_NAME, &db);
