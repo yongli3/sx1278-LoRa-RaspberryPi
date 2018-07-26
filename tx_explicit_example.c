@@ -1,13 +1,20 @@
 #include "LoRa.h"
+#include <stdio.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <net/if.h>
+#include <unistd.h>
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <termios.h>
 #include <errno.h>
-#include <string.h>
 #include<pthread.h>
 #include <sys/time.h>
 #include <sqlite3.h>
 #include <mosquitto.h>
-#include <string.h>
 #include <syslog.h>
 
 #define MQTT_HOST "202.120.26.119"
@@ -66,8 +73,17 @@ static int mqtt_test(char *topic, char *message)
     char clientid[24];
     struct mosquitto *mosq = NULL;
     int ret = 0;
+	char command[255];
 
     printf("%s %s-%s\n", __func__, topic, message);
+
+	// for double safe use system command to send
+
+	sprintf(command, "mosquitto_pub -t \"%s\" -m \"%s;\" -h %s", topic, message, MQTT_HOST);
+
+
+	ret = system(command);
+	syslog(LOG_NOTICE, "exec [%s] return %d\n", command, ret);
     
     mosquitto_lib_init();
 
@@ -119,7 +135,7 @@ static int mqtt_test(char *topic, char *message)
 
     mosquitto_lib_cleanup();
 
-	syslog(LOG_NOTICE, "publish message %s okay!\n", message);
+	syslog(LOG_NOTICE, "publish message [%s] okay!\n", message);
 
     return 0;
 }
@@ -285,6 +301,34 @@ static void set_blocking (int fd, int should_block)
                 printf ("error %d setting term attributes", errno);
 }
 
+static int get_ipaddress(char *ipaddress, int size)
+{
+
+	int fd = 1;
+	 struct ifreq ifr;
+	  
+	 char iface[] = "eth1";
+	  
+	 fd = socket(AF_INET, SOCK_DGRAM, 0);
+	
+	 //Type of address to retrieve - IPv4 IP address
+	 ifr.ifr_addr.sa_family = AF_INET;
+	
+	 //Copy the interface name in the ifreq structure
+	 strncpy(ifr.ifr_name , iface , IFNAMSIZ-1);
+	
+	 ioctl(fd, SIOCGIFADDR, &ifr);
+	
+	 close(fd);
+	
+	 //display result
+	 strcpy(ipaddress, inet_ntoa(( (struct sockaddr_in *)&ifr.ifr_addr )->sin_addr));
+	 printf("%s - %s\n" , iface , ipaddress);
+
+	return 0;
+
+}
+
 static int uart_test2()
 {
     int ret = 0;
@@ -295,6 +339,7 @@ static int uart_test2()
     char read_buffer[256];
     char mqtt_message[256];
 	char hostname[255];
+	char ipaddress[255];
     char *portname = "/dev/ttyUSB0";
 
 	//LOG_ERR
@@ -400,7 +445,7 @@ if (NULL == strstr(read_buffer, "OK")) {
     };
 
     // +ZGIPDNS: 1,1,"IP","10.101.206.237","0.0.0.0","116.116.116.116","221.5.88.88"
-    strcpy(mqtt_message, read_buffer);
+    //strcpy(mqtt_message, read_buffer);
 
     memset(write_buffer, 0, sizeof(write_buffer));
     sprintf(write_buffer, "%s", "AT+ZGACT=1,1\r\n");
@@ -418,12 +463,13 @@ if (NULL == strstr(read_buffer, "OK")) {
         goto cleanup;
     }
 
-        ret = system("ifconfig eth0 down");
-    printf("system return %d\n", ret);
+    //ret = system("ifconfig eth0 down");
+    //printf("system return %d\n", ret);
     
     ret = system("udhcpc -i eth1");
     printf("system return %d\n", ret);
 
+	sleep(3);
 	gethostname(hostname, sizeof(hostname));
 
 	printf("hostname=%s\n", hostname);
@@ -432,7 +478,9 @@ if (NULL == strstr(read_buffer, "OK")) {
 
 	system("systemctl restart systemd-timesyncd.service");
 	
-// publish IPDNS to mqtt
+// publish ipaddress to mqtt
+	get_ipaddress(ipaddress, sizeof(ipaddress));
+	sprintf(mqtt_message, "IP=%s", ipaddress);
 	syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
     ret = mqtt_test(hostname, mqtt_message);
 	if (ret)
@@ -440,6 +488,7 @@ if (NULL == strstr(read_buffer, "OK")) {
 	
 	while (1) {
 		sleep(90);
+		// send to systemd
 		printf("Checking network ...\n");
 		// check if internet is okay
 		
@@ -448,6 +497,9 @@ if (NULL == strstr(read_buffer, "OK")) {
 			syslog(LOG_ERR, "network error!\n");
 			break;
 		}
+
+		get_ipaddress(ipaddress, sizeof(ipaddress));
+		sprintf(mqtt_message, "IP=%s", ipaddress);
 
 		syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
     	ret = mqtt_test(hostname, mqtt_message);
