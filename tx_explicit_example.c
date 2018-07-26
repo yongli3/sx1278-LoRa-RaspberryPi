@@ -67,6 +67,74 @@ static void mosq_log_callback(struct mosquitto *mosq, void *userdata, int level,
   }
 }
 
+static mqtt_qos_test(char *topic, char *message)
+{
+    char msg[256];
+    char clientid[24];
+    struct mosquitto *mosq = NULL;
+    int ret = 0;
+	char command[255];
+	bool clean_session = true;
+
+    printf("%s %s-%s\n", __func__, topic, message);
+
+
+    mosquitto_lib_init();
+
+    memset(clientid, 0, sizeof(clientid));
+    snprintf(clientid, sizeof(clientid) - 1, "clientid_%d", getpid());
+
+    mosq = mosquitto_new(clientid, clean_session, 0);
+
+    if (mosq) {
+        mosquitto_log_callback_set(mosq, mosq_log_callback);
+        mosquitto_connect_callback_set(mosq, connect_callback);
+        mosquitto_message_callback_set(mosq, message_callback);
+    
+        ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
+
+        if (ret) {
+            syslog(LOG_ERR, "MQTT %s connect error!\n", MQTT_HOST);
+			return -1;
+        }
+
+        ret = mosquitto_loop_start(mosq);
+        if (ret != MOSQ_ERR_SUCCESS) {
+            syslog(LOG_ERR, "LOOP fail!\n");
+        }
+
+        //while (1) 
+        {        
+            //sprintf(message, "%s-%d\n", message, current_timestamp());
+            printf("message=[%s] len=%d size=%d\n", message, strlen(message), sizeof(message));
+            //mosquitto_subscribe(mosq, NULL, "/devices/wb-adc/controls/+", 0);
+            mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
+            //break;
+            //usleep(1000*1000);
+        }
+#if 0
+        while (true) {
+            ret = mosquitto_loop(mosq, -1, 1);
+            if(ret){
+                printf("connection error!\n");
+                sleep(10);
+                mosquitto_reconnect(mosq);
+            }
+        }
+#endif    
+    mosquitto_destroy(mosq);
+    } else {
+        syslog(LOG_ERR, "mosq new fail!\n");
+    }
+
+    mosquitto_lib_cleanup();
+
+	syslog(LOG_NOTICE, "publish message [%s] okay!\n", message);
+
+    return 0;
+}
+
+
 static int mqtt_test(char *topic, char *message)
 {
     char msg[256];
