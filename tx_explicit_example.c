@@ -17,12 +17,14 @@
 #include <mosquitto.h>
 #include <syslog.h>
 
+#define WWW_INTERNAL	110
 #define MQTT_HOST "202.120.26.119"
 #define MQTT_PORT 1883
 
 #define DB_NAME  "rawdata.db"
 
-sqlite3 *db = NULL;
+static bool connected = true;
+static sqlite3 *db = NULL;
 
 static long long current_timestamp() {
     struct timeval te; 
@@ -33,22 +35,51 @@ static long long current_timestamp() {
 }
 
 void tx_f(txData *tx){
-    printf("tx done %u\n", (unsigned)time(NULL));
+    syslog(LOG_NOTICE, "tx done %u\n", (unsigned)time(NULL));
 }
 
 static void connect_callback(struct mosquitto *mosq, void *obj, int result)
 {
-    printf("connect callback, rc=%d\n", result);
+    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
+}
+
+static void mqttqos_connect_callback(struct mosquitto *mosq, void *obj, int result)
+{
+    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
+	
+} 
+
+static void mqttqos_disconnect_callback(struct mosquitto *mosq, void *obj, int result)
+{
+    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
+	//connected = false;
+}
+
+static void mqttqos_message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message)
+{
+    bool match = 0;
+    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n", message->payloadlen, (char*) message->payload, message->topic);
+
+    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic, &match);
+    if (match) {
+        syslog(LOG_NOTICE, "got message for ADC topic\n");
+    }
+}
+
+static void mqttqos_publish_callback(struct mosquitto *mosq, void *obj, int result)
+{
+    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
+	mosquitto_disconnect((struct mosquitto *)obj);
 }
 
 static void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message)
 {
     bool match = 0;
-    printf("got message '%.*s' for topic '%s'\n", message->payloadlen, (char*) message->payload, message->topic);
+    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n", message->payloadlen, (char*) message->payload, message->topic);
 
     mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic, &match);
     if (match) {
-        printf("got message for ADC topic\n");
+        syslog(LOG_NOTICE, "got message for ADC topic\n");
     }
 }
 
@@ -62,35 +93,54 @@ static void mosq_log_callback(struct mosquitto *mosq, void *userdata, int level,
     case MOSQ_LOG_NOTICE:
     case MOSQ_LOG_WARNING:
     case MOSQ_LOG_ERR: {
-      printf("%s level=%i:[%s]\n", __func__, level, str);
+      syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
     }
   }
 }
 
-static mqtt_qos_test(char *topic, char *message)
+static void mqttqos_log_callback(struct mosquitto *mosq, void *userdata, int level, const char *str)
+{
+    /* Pring all log messages regardless of level. */
+  
+  switch(level){
+    case MOSQ_LOG_DEBUG:
+    case MOSQ_LOG_INFO:
+    case MOSQ_LOG_NOTICE:
+    case MOSQ_LOG_WARNING:
+    case MOSQ_LOG_ERR: {
+      //syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
+    }
+  }
+}
+
+static int mqtt_qos_test(char *topic, char *message)
 {
     char msg[256];
-    char clientid[24];
+    char clientid[255];
     struct mosquitto *mosq = NULL;
     int ret = 0;
 	char command[255];
+	char hostname[64];
 	bool clean_session = true;
 
-    printf("%s %s-%s\n", __func__, topic, message);
+    syslog(LOG_NOTICE, "+%s topic=[%s] message=[%s]\n", __func__, topic, message);
 
+	gethostname(hostname, sizeof(hostname));
 
     mosquitto_lib_init();
 
     memset(clientid, 0, sizeof(clientid));
-    snprintf(clientid, sizeof(clientid) - 1, "clientid_%d", getpid());
+    snprintf(clientid, sizeof(clientid) - 1, "%s_%d", hostname, getpid());
 
     mosq = mosquitto_new(clientid, clean_session, 0);
 
     if (mosq) {
-        mosquitto_log_callback_set(mosq, mosq_log_callback);
-        mosquitto_connect_callback_set(mosq, connect_callback);
-        mosquitto_message_callback_set(mosq, message_callback);
-    
+        mosquitto_log_callback_set(mosq, mqttqos_log_callback);
+        mosquitto_connect_callback_set(mosq, mqttqos_connect_callback);
+	    mosquitto_disconnect_callback_set(mosq, mqttqos_disconnect_callback);
+        mosquitto_message_callback_set(mosq, mqttqos_message_callback);
+    	mosquitto_publish_callback_set(mosq, mqttqos_publish_callback);
+	
         ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
 
         if (ret) {
@@ -98,42 +148,36 @@ static mqtt_qos_test(char *topic, char *message)
 			return -1;
         }
 
-        ret = mosquitto_loop_start(mosq);
-        if (ret != MOSQ_ERR_SUCCESS) {
-            syslog(LOG_ERR, "LOOP fail!\n");
-        }
-
-        //while (1) 
-        {        
-            //sprintf(message, "%s-%d\n", message, current_timestamp());
-            printf("message=[%s] len=%d size=%d\n", message, strlen(message), sizeof(message));
-            //mosquitto_subscribe(mosq, NULL, "/devices/wb-adc/controls/+", 0);
-            mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
-            //break;
-            //usleep(1000*1000);
-        }
 #if 0
-        while (true) {
-            ret = mosquitto_loop(mosq, -1, 1);
-            if(ret){
-                printf("connection error!\n");
-                sleep(10);
-                mosquitto_reconnect(mosq);
-            }
-        }
-#endif    
-    mosquitto_destroy(mosq);
+		// trigger connect callback
+		do {
+			ret = mosquitto_loop(mosq, -1, 1);
+
+		} while (ret == MOSQ_ERR_SUCCESS && connected);
+#endif
+
+		ret = mosquitto_loop_start(mosq);
+		if (ret != MOSQ_ERR_SUCCESS) {
+			syslog(LOG_ERR, "LOOP fail!\n");
+			return -1;		
+		}
+
+		syslog(LOG_NOTICE, "publish message=[%s] len=%d size=%d\n", message, strlen(message), sizeof(message));
+        mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
+
+		mosquitto_loop_stop(mosq, false);
+        
+    	mosquitto_destroy(mosq);
     } else {
         syslog(LOG_ERR, "mosq new fail!\n");
     }
 
     mosquitto_lib_cleanup();
 
-	syslog(LOG_NOTICE, "publish message [%s] okay!\n", message);
+	syslog(LOG_NOTICE, "-%s\n", __func__);
 
     return 0;
 }
-
 
 static int mqtt_test(char *topic, char *message)
 {
@@ -143,7 +187,7 @@ static int mqtt_test(char *topic, char *message)
     int ret = 0;
 	char command[255];
 
-    printf("%s %s-%s\n", __func__, topic, message);
+    syslog(LOG_NOTICE, "+%s %s-%s\n", __func__, topic, message);
 
 	// for double safe use system command to send
 
@@ -180,7 +224,7 @@ static int mqtt_test(char *topic, char *message)
         //while (1) 
         {        
             //sprintf(message, "%s-%d\n", message, current_timestamp());
-            printf("message=[%s] len=%d size=%d\n", message, strlen(message), sizeof(message));
+            syslog(LOG_NOTICE, "message=[%s] len=%d size=%d\n", message, strlen(message), sizeof(message));
             //mosquitto_subscribe(mosq, NULL, "/devices/wb-adc/controls/+", 0);
             mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
             //break;
@@ -209,7 +253,7 @@ static int mqtt_test(char *topic, char *message)
 }
 
 static int callbackInsert(void *NotUsed, int argc, char **argv, char **colName) {
-    printf("+%s\n", __func__);
+    syslog(LOG_NOTICE, "+%s\n", __func__);
     return 0;
 }
 
@@ -219,7 +263,7 @@ static int callbackSelect(void *NotUsed, int argc, char **argv, char **colName) 
      int ret = -1;
     int i;
     //argc= column number argv=column value
-    printf("+%s argc=%d ID=%s\n", __func__, argc, argv[0]);
+    syslog(LOG_NOTICE, "+%s argc=%d ID=%s\n", __func__, argc, argv[0]);
 
     // send this record to MQTT server, and set local = 0
 
@@ -229,12 +273,12 @@ static int callbackSelect(void *NotUsed, int argc, char **argv, char **colName) 
         ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
         if( ret != SQLITE_OK)
                 {
-                    printf("Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
+                    syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
                     return -1;
                 } 
                 else
                 {
-                    printf("[%s] okay!\n", sqlString);
+                    syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
                 }
 
     
@@ -268,11 +312,11 @@ while (1) {
         ret = sqlite3_exec(db, sqlString, callbackInsert, NULL, &errMsg);
         if( ret != SQLITE_OK)
                 {
-                    printf("Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
+                    syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
                 } 
                 else
                 {
-                    printf("[%s] okay!\n", sqlString);
+                    syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
                 }
 
     
@@ -298,11 +342,11 @@ while (1) {
         ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
         if( ret != SQLITE_OK)
                 {
-                    printf("Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
+                    syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
                 } 
                 else
                 {
-                    printf("[%s] okay!\n", sqlString);
+                    syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
                 }
 
     
@@ -397,7 +441,24 @@ static int get_ipaddress(char *ipaddress, int size)
 
 }
 
-static int uart_test2()
+int time_test()
+{
+  time_t rawtime;
+  struct tm * timeinfo;
+
+  time ( &rawtime );
+  timeinfo = localtime ( &rawtime );
+
+  printf("%04d-%02d-%02d %02d:%02d:%02d\n", 
+  	timeinfo->tm_year + 1900, timeinfo->tm_mon, timeinfo->tm_mday, 
+  	timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+  
+  printf ( "Current local time and date: %s", asctime (timeinfo) );
+
+  return 0;
+}
+
+static int www_connect()
 {
     int ret = 0;
     int i = 0;
@@ -409,21 +470,17 @@ static int uart_test2()
 	char hostname[255];
 	char ipaddress[255];
     char *portname = "/dev/ttyUSB0";
-
-	//LOG_ERR
-
 	
-    int fd = open (portname, O_RDWR | O_NOCTTY | O_SYNC);
+    int fd = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
     if (fd < 0)
     {
    		syslog(LOG_ERR, "error %d opening %s: %s", errno, portname, strerror (errno));
-		
-			system("reboot");
-            return -1;
+		system("reboot");
+        return -1;
     }
     
-    set_interface_attribs (fd, B115200, 0);  // set speed to 115,200 bps, 8n1 (no parity)
-    set_blocking (fd, 0);                // set no blocking
+    set_interface_attribs(fd, B115200, 0);  // set speed to 115,200 bps, 8n1 (no parity)
+    set_blocking(fd, 0);                // set no blocking
     
     while (0)
     {
@@ -546,16 +603,7 @@ if (NULL == strstr(read_buffer, "OK")) {
 
 	system("systemctl restart systemd-timesyncd.service");
 	
-// publish ipaddress to mqtt
-	get_ipaddress(ipaddress, sizeof(ipaddress));
-	sprintf(mqtt_message, "IP=%s", ipaddress);
-	syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
-    ret = mqtt_test(hostname, mqtt_message);
-	if (ret)
-		goto cleanup;
-	
 	while (1) {
-		sleep(90);
 		// send to systemd
 		printf("Checking network ...\n");
 		// check if internet is okay
@@ -568,13 +616,13 @@ if (NULL == strstr(read_buffer, "OK")) {
 
 		get_ipaddress(ipaddress, sizeof(ipaddress));
 		sprintf(mqtt_message, "IP=%s", ipaddress);
-
-		syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
-    	ret = mqtt_test(hostname, mqtt_message);
+		//syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
+    	ret = mqtt_qos_test(hostname, mqtt_message);
 		if (ret) {
 			syslog(LOG_ERR, "MQTT error!\n");
 			break;
 		}
+		sleep(WWW_INTERNAL);
 	}    
 cleanup:    
     close(fd);
@@ -784,7 +832,7 @@ cleanup:
 int main() {
 //create a thread for sqlite reading, and publish to mqtt
 // create a thread for lora data RX, and write to local sqlite
-
+	int i = 0;
     int ret = 0;
     pthread_t thread1, thread2;
     int thr = 1;
@@ -797,7 +845,15 @@ int main() {
 
 	syslog(LOG_NOTICE, "version %s", __DATE__);
 
-    uart_test2();
+	i = 0;
+#if 0
+	while (1) {
+		sprintf(sqlString, "topic-%03d", i++);
+		mqtt_qos_test(sqlString, "testmessage");
+		usleep(1000 * 1000);
+	}
+#endif
+    www_connect();
     return 0;
 
     mqtt_test("topic", "message");
