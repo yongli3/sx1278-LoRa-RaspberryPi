@@ -132,7 +132,8 @@ void lora_remove_dioISR(int gpio_n){
 }
 
 void LoRa_send(LoRa_ctl *modem){
-    if(lora_get_op_mode(modem->spid) != STDBY_MODE){
+	//printf("TX\n");
+	if(lora_get_op_mode(modem->spid) != STDBY_MODE){
         lora_set_satandby_mode(modem->spid);
     }
     LoRa_calculate_packet_t(modem);
@@ -156,7 +157,8 @@ void LoRa_send(LoRa_ctl *modem){
 }
 
 void LoRa_receive(LoRa_ctl *modem){
-    
+
+	//printf("RX\n");
     LoRa_calculate_packet_t(modem);
     if(modem->eth.lowDataRateOptimize){
         lora_set_lowdatarateoptimize_on(modem->spid);
