@@ -1,12 +1,5 @@
 #include "LoRa.h"
 
-#define LORA_TX_LEN	64
-#define LORA_RX_LEN	255
-// wait for COUNT*DELAY
-#define LORA_WAIT_FOR_RECEIVE_COUNT  (6)
-#define LORA_WAIT_FOR_RECEIVE_MS  (140) 
-#define SW_T_PIN 27
-#define SW_R_PIN 22
 static char txbuf[LORA_TX_LEN];
 static char rxbuf[LORA_RX_LEN];
 
@@ -55,6 +48,8 @@ int main(){
 	struct tm * timeinfo;
 	LoRa_ctl modem;
 
+	
+	srand((unsigned)time(NULL));
 	gethostname(hostname, sizeof(hostname));
 //See for typedefs, enumerations and there values in LoRa.h header file
 modem.spiCS = 0;//Raspberry SPI CE pin number
@@ -104,8 +99,8 @@ while (1) {
 	}
 
 	if (modem.rx.data.CRC) {
-			printf(">>rxcrcerror\n");
-			
+			printf(">>rxcrcerror [%s]\n", rxbuf);
+			continue;
 		} else {
 			// crc okay, check if it is the correct format
 			printf(">>rxbuf=[%s]-%d %llu\n", rxbuf, strlen(rxbuf), current_timestamp());
@@ -117,13 +112,15 @@ while (1) {
 			}
 			
 			printf("Get Boardcast send out and wait for ACK\n");
-				time (&rawtime);
-				timeinfo = localtime(&rawtime);		
-				snprintf(txbuf, sizeof(txbuf), "%s %d [%s] %04d-%02d-%02d %02d:%02d:%02d",
-					hostname, send_seq, rxbuf, timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
+			time (&rawtime);
+			timeinfo = localtime(&rawtime);		
+			snprintf(txbuf, sizeof(txbuf), "MCU %s %d [%s] %04d-%02d-%02d %02d:%02d:%02d",
+				hostname, send_seq, rxbuf, timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
 	  				timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
 
-			// wait for ACK
+			modem.tx.data.size = strlen(modem.tx.data.buf) + 1;//Payload len
+			
+			// send out info packet and wait for ACK
 			ack_retry_count = 0;
 			while (ack_retry_count++ < 8) {
 				printf("waitack %d\n", ack_retry_count);
@@ -171,7 +168,7 @@ while (1) {
 					}
 				}
 			}			
-			usleep(1000*500);
+			usleep(1000*(random() % 300));
 		}
 }
 

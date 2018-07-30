@@ -21,6 +21,13 @@
 #include <syslog.h>
 #include <sys/sysinfo.h>
 
+#define LORA_TX_LEN	255
+#define LORA_RX_LEN	255
+// wait for COUNT*DELAY
+#define LORA_WAIT_FOR_RECEIVE_COUNT  (6)
+#define LORA_WAIT_FOR_RECEIVE_MS  (140) 
+#define SW_T_PIN 27
+#define SW_R_PIN 22
 
 #define REG_FIFO 0x00
 #define REG_OP_MODE 0x01

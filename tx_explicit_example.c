@@ -18,11 +18,6 @@
 #include <syslog.h>
 #include <sys/sysinfo.h>
 
-#define LORA_TX_LEN	64
-#define LORA_RX_LEN	255
-// wait for COUNT*DELAY
-#define LORA_WAIT_FOR_RECEIVE_COUNT  (6)
-#define LORA_WAIT_FOR_RECEIVE_MS  (140) 
 #define WWW_INTERNAL_SECONDS	120
 #define MQTT_HOST "202.120.26.119"
 #define MQTT_PORT 1883
@@ -955,6 +950,8 @@ int main(){
 	struct tm * timeinfo;
 	LoRa_ctl modem;
 
+	srand((unsigned)time(NULL));
+
 	gethostname(hostname, sizeof(hostname));
 
 //See for typedefs, enumerations and there values in LoRa.h header file
@@ -996,19 +993,23 @@ send_seq = 0;
 LoRa_begin(&modem);
 while (1)
 {
-	memset(txbuf, 'a', sizeof(txbuf));
-
+	//memset(txbuf, 'a', sizeof(txbuf));
+	sprintf(txbuf, "send %d", send_seq);
+	
 	time (&rawtime);
 	timeinfo = localtime(&rawtime);		
-	snprintf(txbuf, sizeof(txbuf), "BOARDCAST %u %s TX %04d-%02d-%02d %02d:%02d:%02d", send_seq++,
+	snprintf(txbuf, sizeof(txbuf), "BOARDCAST %u %s TX %04d-%02d-%02d %02d:%02d:%02d", send_seq,
 		hostname, timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
 	  timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+
+	modem.tx.data.size = strlen(modem.tx.data.buf) + 1;//Payload len
 	
 	//sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
 	
 	//printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
 
-#if 1	
+#if 1
+	// send out boardcast packet [BOARDCAST 103 test5 TX 2018-07-30 21:44:56]
 	lora_tx_done = false;
 	LoRa_send(&modem);
 
@@ -1039,7 +1040,7 @@ while (1)
 	i = 0;
 	while (!lora_rx_done) {
 		if (i++ > LORA_WAIT_FOR_RECEIVE_COUNT) {
-			printf("RX timeout! %d\n", i);
+			printf("no response, boardcast again %d\n", i);
 			break;
 		}
 		usleep(LORA_WAIT_FOR_RECEIVE_MS*1000);
@@ -1051,29 +1052,40 @@ while (1)
 			printf(">>rxcrcerror\n");
 		} else {
 			printf(">>rxbuf=[%s]-%d %llu\n", rxbuf, strlen(rxbuf), current_timestamp());
-			// data crc okay, send out ACK
-			time (&rawtime);
-			timeinfo = localtime(&rawtime);		
-			snprintf(txbuf, sizeof(txbuf), "ACK %s [%s] %04d-%02d-%02d %02d:%02d:%02d",
-				hostname, rxbuf, timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
-	  			timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-			lora_tx_done = false;
-			LoRa_send(&modem);
+			// data crc okay, check packet type
+			if (strstr(rxbuf, "MCU")) {
+				// get the correct packet send out ACK
+				time (&rawtime);
+				timeinfo = localtime(&rawtime);		
+				snprintf(txbuf, sizeof(txbuf), "ACK from %s {%s} %04d-%02d-%02d %02d:%02d:%02d SEQ=%u",
+					hostname, rxbuf, timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
+		  			timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec, send_seq);
+				
+				modem.tx.data.size = strlen(modem.tx.data.buf) + 1;//Payload len
+				
+				lora_tx_done = false;
+				LoRa_send(&modem);
 
-			printf("<<Sending [%s] length=%d Tsym=%f Tpkt=%f payloadSymbNb=%u\n", 
-				modem.tx.data.buf, strlen(modem.tx.data.buf), modem.tx.data.Tsym, 
-				modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
+				printf("<<Sending [%s] length=%d Tsym=%f Tpkt=%f payloadSymbNb=%u\n",
+					modem.tx.data.buf, strlen(modem.tx.data.buf), modem.tx.data.Tsym, 
+					modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
 
-			printf("<<sleep %u ms to transmitt complete %llu\n", 
-				(unsigned long)modem.tx.data.Tpkt, current_timestamp());
-			usleep((unsigned long)(modem.tx.data.Tpkt * 1000));
+				printf("<<sleep %u ms to transmitt complete %llu\n", 
+					(unsigned long)modem.tx.data.Tpkt, current_timestamp());
+				usleep((unsigned long)(modem.tx.data.Tpkt * 1000));
 
-			while (!lora_tx_done) {
-				printf("<<wait..\n");
-				usleep(1000*40);
+				while (!lora_tx_done) {
+					printf("<<wait..\n");
+					usleep(1000*40);
+				}
+				send_seq++;
+				usleep(1000*500);
+			}else {
+				// ignore the incorrect packet
+				printf(">>noise packet\n");
+				usleep((random() % 300)*1000);
 			}
-
-			usleep(1000*500);
+			
 		}
 	}
 #endif
