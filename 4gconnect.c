@@ -484,7 +484,7 @@ static int www_connect()
     if (fd < 0)
     {
    		syslog(LOG_ERR, "error %d opening %s: %s", errno, portname, strerror (errno));
-		system("reboot");
+		system("reboot -f");
         return -1;
     }
     
@@ -600,8 +600,8 @@ if (NULL == strstr(read_buffer, "OK")) {
     //ret = system("ifconfig eth0 down");
     //printf("system return %d\n", ret);
     
-    ret = system("udhcpc -i eth1");
-    printf("system return %d\n", ret);
+    ret = system("systemctl restart connman");   //system("udhcpc -i eth1");
+    printf("connman return %d\n", ret);
 
 	sleep(3);
 	gethostname(hostname, sizeof(hostname));
@@ -610,8 +610,9 @@ if (NULL == strstr(read_buffer, "OK")) {
 
 	//sprintf(hostname, "%s-network", hostname);
 
-	system("systemctl restart systemd-timesyncd.service");
-	
+	ret = system("systemctl restart systemd-timesyncd.service");
+	printf("timesync return %d\n", ret);
+
 	while (1) {
 		// send to systemd
 		printf("Checking network ...\n");
@@ -833,7 +834,7 @@ static int uart_test()
 
         ret = system("ifconfig eth0 down");
     printf("system return %d\n", ret);
-    
+     not used
     ret = system("udhcpc -i eth1");
     printf("system return %d\n", ret);
 

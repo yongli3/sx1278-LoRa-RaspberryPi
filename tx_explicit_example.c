@@ -29,6 +29,31 @@
 
 #define DB_NAME  "rawdata.db"
 
+
+typedef struct  _AP_BROADCAST_EMPTYPACKAGE
+{ unsigned char startMark;		//起始符号
+  unsigned char LengthL;		//fix 0x0a		
+  unsigned char LengthH;		//fix 0x00
+  unsigned int	AP_Address;
+  unsigned long	time_Count;		//1970年1月1日0点到现在的秒数
+  unsigned char LRC;		//类型
+  unsigned char reserved;	//固定00
+}_AP_BROADCAST_EMPTYPACKAGE;
+
+typedef struct  _AP_ACK_PACKAGE
+{ unsigned char ACKstartMark;		//起始符号
+  unsigned char LengthL;		//fix 0x0a	
+  unsigned char LengthH;		//fix 0x00
+  unsigned int  UM_Address;		//发出单元号
+  unsigned int	UM_SeqNumber;	//发出单元序号
+  unsigned char data0;			//anything	 suggest 0xa5
+  unsigned char data1;			//anything, suggest 0x5a
+  unsigned char LRC;		//类型
+  unsigned char reserved;	//固定00
+}_AP_ACK_PACKAGE;
+
+
+
 static char txbuf[LORA_TX_LEN];
 static char rxbuf[LORA_RX_LEN];
 
