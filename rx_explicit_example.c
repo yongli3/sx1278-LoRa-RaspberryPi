@@ -6,14 +6,6 @@ static char rxbuf[LORA_RX_LEN];
 static bool lora_tx_done = false;
 static bool lora_rx_done = false;
 
-static long long current_timestamp() {
-    struct timeval te; 
-    gettimeofday(&te, NULL); // get current time
-    long long milliseconds = te.tv_sec*1000*1000LL + te.tv_usec; // calculate microseconds
-    //printf("%lld\n", te.tv_usec);
-    return milliseconds;
-}
-
 static void rx_f(rxData *rx){
 	int i = 0;
 
@@ -79,13 +71,12 @@ modem.eth.implicitHeader = 0;//Explicit header mode
 modem.eth.syncWord = 0x12;
 //For detail information about SF, Error Coding Rate, Explicit header, Bandwidth, AGC, Over current protection and other features refer to sx127x datasheet https://www.semtech.com/uploads/documents/DS_SX1276-7-8-9_W_APP_V5.pdf
 
-#if 0
 gpioSetMode(SW_T_PIN, PI_OUTPUT);
 gpioWrite(SW_T_PIN, 0);
 
 gpioSetMode(SW_R_PIN, PI_OUTPUT);
 gpioWrite(SW_R_PIN, 0);
-#endif
+
 LoRa_begin(&modem);
 send_seq = 0;
 while (1) {
@@ -103,7 +94,7 @@ while (1) {
 			continue;
 		} else {
 			// crc okay, check if it is the correct format
-			printf(">>rxbuf=[%s]-%d %llu\n", rxbuf, strlen(rxbuf), current_timestamp());
+			printf(">>rxbuf=[%s]-%lu %llu\n", rxbuf, strlen(rxbuf), current_timestamp());
 			// make sure it is boardcast
 			if (!strstr(rxbuf, "BOARDCAST")) {
 				 printf("skip\n");

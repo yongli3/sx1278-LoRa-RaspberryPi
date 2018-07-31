@@ -24,16 +24,14 @@
 
 #define DB_NAME  "rawdata.db"
 
-
 typedef struct  _AP_BROADCAST_EMPTYPACKAGE
 { unsigned char startMark;		//起始符号
-  unsigned char LengthL;		//fix 0x0a		
-  unsigned char LengthH;		//fix 0x00
-  unsigned int	AP_Address;
-  unsigned long	time_Count;		//1970年1月1日0点到现在的秒数
+  unsigned char length;		//fix 0x0a
+  unsigned int AP_Address;
+  unsigned long time_Count;		//1970年1月1日0点到现在的秒数
   unsigned char LRC;		//类型
   unsigned char reserved;	//固定00
-}_AP_BROADCAST_EMPTYPACKAGE;
+} AP_BROADCAST_EMPTYPACKAGE;
 
 typedef struct  _AP_ACK_PACKAGE
 { unsigned char ACKstartMark;		//起始符号
@@ -45,9 +43,7 @@ typedef struct  _AP_ACK_PACKAGE
   unsigned char data1;			//anything, suggest 0x5a
   unsigned char LRC;		//类型
   unsigned char reserved;	//固定00
-}_AP_ACK_PACKAGE;
-
-
+} AP_ACK_PACKAGE;
 
 static char txbuf[LORA_TX_LEN];
 static char rxbuf[LORA_RX_LEN];
@@ -56,14 +52,6 @@ static bool lora_tx_done = false;
 static bool lora_rx_done = false;
 static bool connected = true;
 static sqlite3 *db = NULL;
-
-static long long current_timestamp() {
-    struct timeval te; 
-    gettimeofday(&te, NULL); // get current time
-    long long milliseconds = te.tv_sec*1000*1000LL + te.tv_usec; // calculate microseconds
-    //printf("%lld\n", te.tv_usec);
-    return milliseconds;
-}
 
 static void rx_f(rxData *rx){
 
@@ -677,7 +665,7 @@ if (NULL == strstr(read_buffer, "OK")) {
 
 		get_ipaddress(ipaddress, sizeof(ipaddress));
 		sysinfo(&info);
-		snprintf(mqtt_message, sizeof(mqtt_message), "IP=%s;UP=%d", ipaddress, info.uptime);
+		snprintf(mqtt_message, sizeof(mqtt_message), "IP=%s;UP=%lu", ipaddress, info.uptime);
 		//syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
 
 		time (&rawtime);

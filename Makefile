@@ -27,5 +27,5 @@ receive_explicit: LoRa.o rx_explicit_example.o
 receive_implicit: LoRa.o rx_implicit_example.o
 	gcc -o receive_implicit rx_implicit_example.o LoRa.o -lpigpio -lrt -pthread -lm
 
-4gconnect: 4gconnect.o
-	gcc -g -o 4gconnect 4gconnect.o -lrt -pthread -lm -lsqlite3 -lmosquitto
+4gconnect: 4gconnect.o LoRa.o
+	gcc -g -o 4gconnect 4gconnect.o LoRa.o -lpigpio -lrt -pthread -lm -lsqlite3 -lmosquitto

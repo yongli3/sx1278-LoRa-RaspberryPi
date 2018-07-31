@@ -26,8 +26,8 @@
 // wait for COUNT*DELAY
 #define LORA_WAIT_FOR_RECEIVE_COUNT  (6)
 #define LORA_WAIT_FOR_RECEIVE_MS  (140) 
-#define SW_T_PIN 27
-#define SW_R_PIN 22
+#define SW_T_PIN 27  // 1 enable TX
+#define SW_R_PIN 22   // 1 enable RX
 
 #define REG_FIFO 0x00
 #define REG_OP_MODE 0x01
@@ -210,6 +210,26 @@ typedef struct {
     LoRa_Rx rx;//rx structure
     LoRa_Tx tx;//tx structure
 } LoRa_ctl;
+
+static void radio_tx()
+{
+	gpioWrite(SW_T_PIN, 1);
+	gpioWrite(SW_R_PIN, 0);
+}
+
+static void radio_rx()
+{
+	gpioWrite(SW_T_PIN, 1);
+	gpioWrite(SW_R_PIN, 0);
+}
+
+static long long current_timestamp() {
+    struct timeval te; 
+    gettimeofday(&te, NULL); // get current time
+    long long milliseconds = te.tv_sec*1000*1000LL + te.tv_usec; // calculate microseconds
+    //printf("%lld\n", te.tv_usec);
+    return milliseconds;
+}
 
 int LoRa_begin(LoRa_ctl *modem);
 void LoRa_send(LoRa_ctl *modem);
