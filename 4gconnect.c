@@ -631,7 +631,7 @@ if (NULL == strstr(read_buffer, "OK")) {
 		ret = mqtt_publish_message(mqtt_topic, mqtt_message);
 		if (ret) {
 			syslog(LOG_ERR, "MQTT error!\n");
-			break;
+			//break;
 		}
 		sleep(WWW_INTERNAL);
 	}    
