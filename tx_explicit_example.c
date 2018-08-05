@@ -70,6 +70,10 @@ typedef struct  _AP_ACK_PACKAGE
 static char txbuf[LORA_TX_LEN];
 static char rxbuf[LORA_RX_LEN];
 
+static AP_BROADCAST_EMPTYPACKAGE boardcast_packet;
+static UM_REPORT_PACKAGE report_packet;
+static AP_ACK_PACKAGE ack_packet;
+
 static bool lora_tx_done = false;
 static bool lora_rx_done = false;
 static bool connected = true;
@@ -960,9 +964,7 @@ int main(){
 	time_t rawtime;
 	struct tm * timeinfo;
 	LoRa_ctl modem;
-	AP_BROADCAST_EMPTYPACKAGE boardcast_packet;
-	UM_REPORT_PACKAGE report_packet;
-	AP_ACK_PACKAGE ack_packet;
+
 
 	srand((unsigned)time(NULL));
 
@@ -990,14 +992,14 @@ modem.tx.data.buf = (char *)&boardcast_packet;
 modem.rx.callback = rx_f;
 modem.rx.data.buf = rxbuf;
 
-send_len = sizeof(boardcast_packet);
+//send_len = sizeof(boardcast_packet);
 
 //sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
 
 //printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
 //memcpy(modem.tx.data.buf, "LoRa", 5);//copy data we'll sent to buffer
 
-modem.tx.data.size = send_len + 1;//Payload len
+modem.tx.data.size = sizeof(boardcast_packet) + 1;//Payload len
 modem.eth.preambleLen = 6;
 // data speed for 64 bytes
 // BW500+SF7=87ms  DIO high=21.7ms 106ms
@@ -1031,7 +1033,7 @@ while (1)
 	//  timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
 	
 	boardcast_packet.time_Count = time(NULL);
-	modem.tx.data.size = send_len + 1;//Payload len
+	modem.tx.data.size = sizeof(boardcast_packet) + 1;//Payload len
 	
 	//sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
 	
@@ -1046,12 +1048,12 @@ while (1)
 		printf("%02x\n", modem.tx.data.buf[i]);
 	}
 #endif
-	printf("<<%u Sending CAST Tsym=%f Tpkt=%f payloadSymbNb=%u\n", boardcast_packet.time_Count, 
-		modem.tx.data.Tsym, 
+	printf("<<%llu %u Sending CAST Tsym=%f Tpkt=%f payloadSymbNb=%u\n", 
+		current_timestamp(), boardcast_packet.time_Count, 
+		modem.tx.data.Tsym,
 		modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
 
 	//printf("<<sleep %u ms to transmitt complete %llu\n", (unsigned long)modem.tx.data.Tpkt, current_timestamp());
-
 	usleep((unsigned long)(modem.tx.data.Tpkt * 1000));
 
 	while (!lora_tx_done) {
@@ -1067,7 +1069,7 @@ while (1)
 #if 1
 	// tx done, start to receive
 	printf("wait for report packet ...\n");
-	usleep(LORA_WAIT_FOR_RECEIVE_MS*100);
+	//usleep(LORA_WAIT_FOR_RECEIVE_MS*100);
 	memset(rxbuf, 0, sizeof(rxbuf));
 	lora_rx_done = false;
 	LoRa_receive(&modem);
@@ -1079,7 +1081,7 @@ while (1)
 			//printf("no response, boardcast again %d %u\n", i, time(NULL));
 			break;
 		}
-		usleep(LORA_WAIT_FOR_RECEIVE_MS*1000);
+		usleep(LORA_WAIT_FOR_RECEIVE_MS*1000);// 150ms * 20
 	}
 
 	if (lora_rx_done) {
@@ -1099,7 +1101,7 @@ while (1)
 			
 			if (report_packet.package_StartMark == TYPE_REPORT) {
 				// send out ACK
-				printf("Recv:\n");
+				printf("Recv REPORT:\n");
 				printf("startmark=0x%x\n", report_packet.package_StartMark);
 				printf("length=%d\n", report_packet.length);
 				printf("unitAddr=0x%x\n", report_packet.SendUnitAddress);
@@ -1115,16 +1117,17 @@ while (1)
 				printf("APP_ID=0x%x\n", report_packet.AP_ID);
 				printf("BatVol=%d\n", report_packet.BatVoltage);
 				printf("%x\n", report_packet.reserved);
-
+				
 				memset(&ack_packet, 0, sizeof(ack_packet));
 				ack_packet.ACKstartMark = TYPE_ACK;
 				ack_packet.length = sizeof(ack_packet) - 1;
-				ack_packet.AP_Address = 5;
+				ack_packet.AP_Address = 0;
   				ack_packet.SendUnitAddress = report_packet.SendUnitAddress; 
 				ack_packet.SendUnit_SeqCounter = report_packet.SendUnit_SeqCounter;
   				ack_packet.crc = 0;
-
-				memcpy(txbuf, &ack_packet, sizeof(ack_packet));
+				modem.tx.data.buf = (char *)&ack_packet;
+				//while (1) {
+				ack_packet.AP_Address++;
 				modem.tx.data.size = sizeof(ack_packet) + 1;//Payload len
 				#if 0
 				printf("Dump ACK:\n");
@@ -1132,10 +1135,13 @@ while (1)
 					printf("%d:%x\n", i, txbuf[i]);
 				}
 				#endif
+				// send ACK, based on test, needs to delay 1.8 seconds for MCU to receive ACK
+				usleep(1000*1800);
 				lora_tx_done = false;
 				LoRa_send(&modem);
 
-				printf("<<Sending ACK length=%d Tsym=%f Tpkt=%f payloadSymbNb=%u\n",
+				printf("<<%llu Sending ACK %d length=%d Tsym=%f Tpkt=%f payloadSymbNb=%u\n", 
+					current_timestamp(), ack_packet.AP_Address,
 					modem.tx.data.size, modem.tx.data.Tsym, 
 					modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
 
@@ -1147,9 +1153,13 @@ while (1)
 					printf("<<wait..\n");
 					usleep(1000*40);
 				}
-				send_seq++;
 				
 				usleep(1000*1000);
+				//}
+				
+				send_seq++;
+				
+				//usleep(1000*1000);
 				
 			} else {
 				printf(" invalide packet %x\n", report_packet.package_StartMark);

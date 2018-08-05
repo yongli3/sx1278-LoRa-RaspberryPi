@@ -14,8 +14,8 @@ static void rx_f(rxData *rx){
 		rx->size = 0;
 		printf(">>RXCRCERR\n");
 	} else {
-		printf(">>RXdone %llu [%s] CRC=%d size=%d RSSI=%d SNR=%f\n", 
-			current_timestamp(), rx->buf, rx->CRC, rx->size, rx->RSSI, rx->SNR);
+		printf(">>RXdone %llu CRC=%d size=%d RSSI=%d SNR=%f\n", 
+			current_timestamp(), rx->CRC, rx->size, rx->RSSI, rx->SNR);
 	}
 #if 0
 	for (i = 0; i < rx->size; i++) {
@@ -94,7 +94,14 @@ while (1) {
 			continue;
 		} else {
 			// crc okay, check if it is the correct format
-			printf(">>rxbuf=[%s]-%lu %llu\n", rxbuf, strlen(rxbuf), current_timestamp());
+			printf(">>%lu %llu\n", modem.rx.data.size, current_timestamp());
+
+			for (i = 0; i < modem.rx.data.size; i++) {
+				printf("%d:%x\n", i, rxbuf[i]);
+			}
+
+			continue;
+			
 			// make sure it is boardcast
 			if (!strstr(rxbuf, "BOARDCAST")) {
 				 printf("skip\n");
