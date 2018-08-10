@@ -956,7 +956,7 @@ int main() {
 }
 #else
 int main(){
-	unsigned char send_len = 0;
+	//unsigned char send_len = 0;
 	unsigned int send_seq = 0;
 	int i = 0;
 	int ret = 0;
@@ -1031,8 +1031,16 @@ while (1)
 	//snprintf(txbuf, sizeof(txbuf), "BOARDCAST %u %s TX %04d-%02d-%02d %02d:%02d:%02d", send_seq,
 	//	hostname, timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
 	//  timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-	
+
+	memset(&boardcast_packet, 0, sizeof(boardcast_packet));
+	boardcast_packet.AP_Address = 5;
+	boardcast_packet.LRC = 0;
+	boardcast_packet.startMark = TYPE_BOARDCAST;
 	boardcast_packet.time_Count = time(NULL);
+	boardcast_packet.length = sizeof(boardcast_packet) - 1;
+	boardcast_packet.reserved = 0;
+	
+	modem.tx.data.buf = (char *)&boardcast_packet;
 	modem.tx.data.size = sizeof(boardcast_packet) + 1;//Payload len
 	
 	//sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
@@ -1043,12 +1051,13 @@ while (1)
 	// send out boardcast packet [BOARDCAST 103 test5 TX 2018-07-30 21:44:56]
 	lora_tx_done = false;
 	LoRa_send(&modem);
-#if 0
-	for (i = 0; i < send_len; i++) {
-		printf("%02x\n", modem.tx.data.buf[i]);
+#if 1
+	for (i = 0; i < modem.tx.data.size; i++) {
+		printf("%02x ", modem.tx.data.buf[i]);
 	}
+	//printf("\n");
 #endif
-	printf("<<%llu %u Sending CAST Tsym=%f Tpkt=%f payloadSymbNb=%u\n", 
+	printf("<<%llu %u CAST Tsym=%f Tpkt=%f payloadSymbNb=%u\n", 
 		current_timestamp(), boardcast_packet.time_Count, 
 		modem.tx.data.Tsym,
 		modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
@@ -1061,7 +1070,7 @@ while (1)
 		usleep(1000*40);
 	}
 
-	usleep(1000*500);
+	//usleep(1000*500);
 	//sleep(1);
 	//continue;
 #endif
@@ -1077,6 +1086,7 @@ while (1)
 	//sleep(100);
 	i = 0;
 	while (!lora_rx_done) {
+		//printf("wait rpt %d\n", i);
 		if (i++ > LORA_WAIT_FOR_RECEIVE_COUNT) {
 			//printf("no response, boardcast again %d %u\n", i, time(NULL));
 			break;
@@ -1101,60 +1111,71 @@ while (1)
 			
 			if (report_packet.package_StartMark == TYPE_REPORT) {
 				// send out ACK
-				printf("Recv REPORT:\n");
-				printf("startmark=0x%x\n", report_packet.package_StartMark);
-				printf("length=%d\n", report_packet.length);
-				printf("unitAddr=0x%x\n", report_packet.SendUnitAddress);
-				printf("send_seq=0x%x\n", report_packet.SendUnit_SeqCounter);
-				printf("evnt_type=0x%x\n", report_packet.Event_Type);
-				printf("timestamp=%lu\n", report_packet.Event_timeStamp);
-				printf("trainID=0x%x\n", report_packet.TrainID);
-				printf("%x\n", report_packet.TrainNumber1);
-				printf("%x\n", report_packet.TrainNumber2);
-				printf("%x\n", report_packet.TrainNumber3);
-				printf("Username=[%s]\n", report_packet.UserName);
-				printf("UserID=[%s]\n", report_packet.UserIdNum);
-				printf("APP_ID=0x%x\n", report_packet.AP_ID);
-				printf("BatVol=%d\n", report_packet.BatVoltage);
-				printf("%x\n", report_packet.reserved);
+				printf(">>RPT: %u ", time(NULL));
+				for (i = 0; i < sizeof(report_packet); i++) {
+					printf("%02x ", rxbuf[i]);
+				}
+				printf("\n");
+				#if 1
+				printf("startmark=0x%x ", report_packet.package_StartMark);
+				printf("len=%d ", report_packet.length);
+				printf("unitAddr=0x%x ", report_packet.SendUnitAddress);
+				printf("send_seq=0x%x ", report_packet.SendUnit_SeqCounter);
+				printf("evnt_type=0x%x ", report_packet.Event_Type);
+				printf("timestamp=%lu ", report_packet.Event_timeStamp);
+				printf("trainID=0x%x ", report_packet.TrainID);
+				printf("%x ", report_packet.TrainNumber1);
+				printf("%x ", report_packet.TrainNumber2);
+				printf("%x ", report_packet.TrainNumber3);
+				printf("Username=[%s] ", report_packet.UserName);
+				printf("UserID=[%s] ", report_packet.UserIdNum);
+				printf("APP_ID=0x%x ", report_packet.AP_ID);
+				printf("BatVol=%d ", report_packet.BatVoltage);
+				printf("resve=0x%x\n", report_packet.reserved);
+				#endif
 				
 				memset(&ack_packet, 0, sizeof(ack_packet));
 				ack_packet.ACKstartMark = TYPE_ACK;
 				ack_packet.length = sizeof(ack_packet) - 1;
-				ack_packet.AP_Address = 0;
+				ack_packet.AP_Address = time(NULL);
   				ack_packet.SendUnitAddress = report_packet.SendUnitAddress; 
 				ack_packet.SendUnit_SeqCounter = report_packet.SendUnit_SeqCounter;
   				ack_packet.crc = 0;
 				modem.tx.data.buf = (char *)&ack_packet;
 				//while (1) {
-				ack_packet.AP_Address++;
+				//ack_packet.AP_Address++;
 				modem.tx.data.size = sizeof(ack_packet) + 1;//Payload len
-				#if 0
-				printf("Dump ACK:\n");
+				#if 1
+				printf("<<ACK:");
 				for (i = 0; i < sizeof(ack_packet); i++) {
-					printf("%d:%x\n", i, txbuf[i]);
+					printf("%02x ", i, txbuf[i]);
 				}
+				//printf("\n");
 				#endif
 				// send ACK, based on test, needs to delay 1.8 seconds for MCU to receive ACK
-				usleep(1000*1800);
+				// upload data to mysql
+				
+				
+				usleep(1000*1000);
 				lora_tx_done = false;
 				LoRa_send(&modem);
 
-				printf("<<%llu Sending ACK %d length=%d Tsym=%f Tpkt=%f payloadSymbNb=%u\n", 
+				printf("<<%llu Sending ACK 0x%x length=%d Tsym=%f Tpkt=%f payloadSymbNb=%u\n", 
 					current_timestamp(), ack_packet.AP_Address,
 					modem.tx.data.size, modem.tx.data.Tsym, 
 					modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
 
 				printf("<<sleep %u ms to transmitt complete %llu\n", 
 					(unsigned long)modem.tx.data.Tpkt, current_timestamp());
-				usleep((unsigned long)(modem.tx.data.Tpkt * 1000));
+				usleep((unsigned long)(modem.tx.data.Tpkt * 1000) + 500);
 
 				while (!lora_tx_done) {
 					printf("<<wait..\n");
 					usleep(1000*40);
 				}
-				
-				usleep(1000*1000);
+
+				// delay after send out ACK
+				usleep(1000*500);
 				//}
 				
 				send_seq++;
@@ -1203,6 +1224,9 @@ while (1)
 			}
 			#endif
 		}
+	}else {
+		printf("NORPT\n");
+		usleep((random() % 300)*1000);
 	}
 #endif
 }

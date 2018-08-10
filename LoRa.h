@@ -24,7 +24,7 @@
 #define LORA_TX_LEN	255
 #define LORA_RX_LEN	255
 // wait for COUNT*DELAY
-#define LORA_WAIT_FOR_RECEIVE_COUNT  (20)
+#define LORA_WAIT_FOR_RECEIVE_COUNT  (40)
 #define LORA_WAIT_FOR_RECEIVE_MS  (150) 
 #define SW_T_PIN 27  // 1 enable TX
 #define SW_R_PIN 22   // 1 enable RX
