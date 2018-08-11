@@ -106,6 +106,7 @@ static void mqttqos_log_callback(struct mosquitto *mosq, void *userdata, int lev
   }
 }
 
+// topic=[test5-2018-08-10 21:31:39] message=[IP=10.101.152.177;UP=10183]
 static int mqtt_publish_message(char *topic, char *message)
 {
     char msg[256];
@@ -443,7 +444,7 @@ int time_test()
   timeinfo = localtime(&rawtime);
 
   printf("%04d-%02d-%02d %02d:%02d:%02d\n", 
-  	timeinfo->tm_year + 1900, timeinfo->tm_mon, timeinfo->tm_mday, 
+  	timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
   	timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
   
   printf ("Current local time and date: %s", asctime(timeinfo));
@@ -618,7 +619,7 @@ if (NULL == strstr(read_buffer, "OK")) {
 
 		get_ipaddress(ipaddress, sizeof(ipaddress));
 		sysinfo(&info);
-		snprintf(mqtt_message, sizeof(mqtt_message), "IP=%s;UP=%d", ipaddress, info.uptime);
+		snprintf(mqtt_message, sizeof(mqtt_message), "IP=%s;UP=%lu", ipaddress, info.uptime);
 		//syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
 
 		time (&rawtime);

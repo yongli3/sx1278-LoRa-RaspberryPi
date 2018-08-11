@@ -28,6 +28,11 @@
 #define TYPE_REPORT 0x3b
 #define TYPE_ACK	0x3c
 
+#define MOBILE_REPORT_EVENT_1  1
+#define MOBILE_REPORT_EVENT_2  2
+#define MOBILE_REPORT_EVENT_3  3
+#define MOBILE_REPORT_EVENT_4  4
+
 typedef struct  _AP_BROADCAST_EMPTYPACKAGE
 { 
 	uint8_t startMark;		//起始符号
@@ -47,12 +52,12 @@ typedef struct _UM_REPORT_PACKAGE
 	uint8_t Event_Type;
 	uint32_t Event_timeStamp;
 	uint16_t TrainID;	//列车号
-	uint8_t TrainNumber1;
+	uint8_t TrainNumber1;  // 车次号 number1 << 16| number2 << 8 | number3
 	uint8_t TrainNumber2;
 	uint8_t TrainNumber3;
 	uint8_t UserName[9];//="user1234";
 	uint8_t UserIdNum[9];//="12345678";
-	uint16_t AP_ID;
+	uint16_t AP_ID; // station_id
 	uint8_t BatVoltage;
 	uint8_t reserved;
 } __attribute__((packed)) UM_REPORT_PACKAGE;
@@ -513,7 +518,10 @@ int time_test()
   time_t rawtime;
   struct tm * timeinfo;
 
-  time (&rawtime);
+  time(&rawtime);
+
+   printf("%s\n", ctime(&rawtime));
+  
   timeinfo = localtime(&rawtime);
 
   printf("%04d-%02d-%02d %02d:%02d:%02d\n", 
@@ -956,17 +964,22 @@ int main() {
 }
 #else
 int main(){
+	char mqtt_message[512];
+	char mqtt_topic[256];
 	//unsigned char send_len = 0;
 	unsigned int send_seq = 0;
 	int i = 0;
 	int ret = 0;
-	char hostname[128];
+	char hostname[64];
+	char current_date[64];
 	time_t rawtime;
 	struct tm * timeinfo;
 	LoRa_ctl modem;
 
-
+	gethostname(hostname, sizeof(hostname));
 	srand((unsigned)time(NULL));
+
+	//printf("%d-%s\n", strtol(hostname, NULL, 10), hostname);
 
 	//printf("%d-%d-%d-%d\n", sizeof(uint8_t), sizeof(uint16_t), sizeof(uint32_t), sizeof(unsigned long));
 	//return 0;
@@ -975,7 +988,7 @@ int main(){
 	memset(&boardcast_packet, 0, sizeof(boardcast_packet));
 	memset(&report_packet, 0, sizeof(report_packet));
 
-	boardcast_packet.AP_Address = 5;
+	boardcast_packet.AP_Address = strtol(hostname, NULL, 10);
 	boardcast_packet.LRC = 0;
 	boardcast_packet.startMark = TYPE_BOARDCAST;
 	boardcast_packet.time_Count = time(NULL);
@@ -1033,7 +1046,7 @@ while (1)
 	//  timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
 
 	memset(&boardcast_packet, 0, sizeof(boardcast_packet));
-	boardcast_packet.AP_Address = 5;
+	boardcast_packet.AP_Address = strtol(hostname, NULL, 10);
 	boardcast_packet.LRC = 0;
 	boardcast_packet.startMark = TYPE_BOARDCAST;
 	boardcast_packet.time_Count = time(NULL);
@@ -1133,11 +1146,53 @@ while (1)
 				printf("BatVol=%d ", report_packet.BatVoltage);
 				printf("resve=0x%x\n", report_packet.reserved);
 				#endif
-				
+				if (MOBILE_REPORT_EVENT_1 == report_packet.Event_Type) {
+					#if 1					
+					memset(mqtt_topic, 0, sizeof(mqtt_topic));
+					sprintf(mqtt_topic, "%s", "rawdata");
+					memset(mqtt_message, 0, sizeof(mqtt_message));
+					sprintf(mqtt_message, "event_type=%u", report_packet.Event_Type);
+					sprintf(mqtt_message, "%s;src_apstation=%u", mqtt_message, strtol(hostname, NULL, 10));
+					sprintf(mqtt_message, "%s;seqno_apstation=%u", mqtt_message, send_seq);
+
+					time(&rawtime);
+					timeinfo = localtime(&rawtime);
+					memset(current_date, 0, sizeof(current_date));
+					sprintf(current_date, "%04d-%02d-%02d-%02d:%02d:%02d", timeinfo->tm_year + 1900, 
+						timeinfo->tm_mon + 1, timeinfo->tm_mday, 
+  						timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+					sprintf(mqtt_message, "%s;timestamp_apstation=%s", mqtt_message, current_date);
+
+					sprintf(mqtt_message, "%s;src_mobile=%u", mqtt_message, report_packet.SendUnitAddress);
+					sprintf(mqtt_message, "%s;seqno_mobile=%u", mqtt_message, report_packet.SendUnit_SeqCounter);
+
+					rawtime = report_packet.Event_timeStamp;
+					timeinfo = localtime(&rawtime);
+					memset(current_date, 0, sizeof(current_date));
+					sprintf(current_date, "%04d-%02d-%02d-%02d:%02d:%02d", timeinfo->tm_year + 1900, 
+						timeinfo->tm_mon + 1, timeinfo->tm_mday, 
+  						timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);					
+					sprintf(mqtt_message, "%s;timestamp_mobile=%s", mqtt_message, current_date);
+					sprintf(mqtt_message, "%s;train_id=%u", mqtt_message, report_packet.TrainID);
+					sprintf(mqtt_message, "%s;train_seq=%u", mqtt_message, 
+						report_packet.TrainNumber1 << 16 | report_packet.TrainNumber2 << 8 | report_packet.TrainNumber3);
+					sprintf(mqtt_message, "%s;driver_name=%s", mqtt_message, report_packet.UserName);
+					sprintf(mqtt_message, "%s;driver_id=%u", mqtt_message, strtol(report_packet.UserIdNum, NULL, 10));
+					sprintf(mqtt_message, "%s;station_id=%u", mqtt_message, report_packet.AP_ID);
+					sprintf(mqtt_message, "%s;batt_vol=%u", mqtt_message, report_packet.BatVoltage);
+					sprintf(mqtt_message, "%s;reserved=%u", mqtt_message, report_packet.reserved);
+					#endif
+					printf("%llu +MQTT %s-%s \n", current_timestamp(), mqtt_topic, mqtt_message);
+					mqtt_publish_message(mqtt_topic, mqtt_message);
+					printf("%llu -MQTT\n", current_timestamp());
+				} else {
+					printf("Unsupport RPT type %d\n", report_packet.Event_Type);
+				}
+			
 				memset(&ack_packet, 0, sizeof(ack_packet));
 				ack_packet.ACKstartMark = TYPE_ACK;
 				ack_packet.length = sizeof(ack_packet) - 1;
-				ack_packet.AP_Address = time(NULL);
+				ack_packet.AP_Address = strtol(hostname, NULL, 10);
   				ack_packet.SendUnitAddress = report_packet.SendUnitAddress; 
 				ack_packet.SendUnit_SeqCounter = report_packet.SendUnit_SeqCounter;
   				ack_packet.crc = 0;
@@ -1154,8 +1209,7 @@ while (1)
 				#endif
 				// send ACK, based on test, needs to delay 1.8 seconds for MCU to receive ACK
 				// upload data to mysql
-				
-				
+				// generate the mqtt message, to upload to DB
 				usleep(1000*1000);
 				lora_tx_done = false;
 				LoRa_send(&modem);
