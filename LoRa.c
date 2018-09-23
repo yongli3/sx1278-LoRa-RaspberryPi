@@ -6,8 +6,8 @@ int LoRa_begin(LoRa_ctl *modem){
     
     if (gpioInitialise() < 0)
     {
-        printf("Pigpio init error\n");
-        return 0;
+        syslog(LOG_ERR, "Pigpio init error\n");
+        return -1;
     }
     
     lora_reset(modem->eth.resetGpioN);
@@ -16,8 +16,10 @@ int LoRa_begin(LoRa_ctl *modem){
         return modem->spid;
 
     RegVersion = lora_reg_read_byte(modem->spid, 0x42);
+
+    syslog(LOG_DEBUG, "IC Version 0x%x\n", RegVersion);
     if (RegVersion != 0x12) {
-        printf("Version %x incorrect!\n", RegVersion);
+        syslog(LOG_ERR, "IC Version 0x%x incorrect!\n", RegVersion);
         return -1;
     }
 
@@ -378,7 +380,7 @@ void lora_reset(unsigned char gpio_n){
     gpioWrite(gpio_n, 1);
     usleep(5000);
 
-    printf("reset using %d\n", gpio_n);
+    syslog(LOG_DEBUG, "reset using GPIO%d\n", gpio_n);
 }
 
 void lora_reset_irq_flags(int spid){

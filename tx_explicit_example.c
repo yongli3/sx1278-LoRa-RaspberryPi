@@ -1031,6 +1031,10 @@ int main()
     struct tm* timeinfo;
     LoRa_ctl modem;
 
+    openlog("LORA", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
+
+    syslog(LOG_INFO, "Built on %s %s", __DATE__, __TIME__);
+
     gethostname(hostname, sizeof(hostname));
     srand((unsigned)time(NULL));
 
@@ -1040,7 +1044,7 @@ int main()
     // sizeof(uint32_t), sizeof(unsigned long));
     // return 0;
 
-    printf("clear %d-%d\n", sizeof(boardcast_packet), sizeof(report_packet));
+    syslog(LOG_DEBUG, "Boardcat packet=%d report packet=%d\n", sizeof(boardcast_packet), sizeof(report_packet));
     memset(&boardcast_packet, 0, sizeof(boardcast_packet));
     memset(&report_packet, 0, sizeof(report_packet));
 
@@ -1093,7 +1097,13 @@ int main()
     // sx127x datasheet
     // https://www.semtech.com/uploads/documents/DS_SX1276-7-8-9_W_APP_V5.pdf
     send_seq = 0;
-    LoRa_begin(&modem);
+    ret = LoRa_begin(&modem);
+    if (ret < 0)
+    {
+        syslog(LOG_ERR, "Lora begin error! %d", ret);
+        return -1;
+    }
+
     while (1)
     {
         // memset(txbuf, 'a', sizeof(txbuf));
@@ -1128,13 +1138,14 @@ int main()
         lora_tx_done = false;
         LoRa_send(&modem);
 #if 1
+        syslog(LOG_DEBUG, "TX size=%d", modem.tx.data.size);
         for (i = 0; i < modem.tx.data.size; i++)
         {
-            printf("%02x ", modem.tx.data.buf[i]);
+            syslog(LOG_DEBUG, "%02x ", modem.tx.data.buf[i]);
         }
 // printf("\n");
 #endif
-        printf("<<%llu %u CAST Tsym=%f Tpkt=%f payloadSymbNb=%u\n",
+        syslog(LOG_DEBUG, "<<%llu %u CAST Tsym=%f Tpkt=%f payloadSymbNb=%u\n",
                current_timestamp(), boardcast_packet.time_Count,
                modem.tx.data.Tsym, modem.tx.data.Tpkt,
                modem.tx.data.payloadSymbNb);
@@ -1145,7 +1156,7 @@ int main()
 
         while (!lora_tx_done)
         {
-            printf("<<wait for tx_done..\n");
+            syslog(LOG_DEBUG, "<<wait for tx_done..\n");
             usleep(1000 * 40);
         }
 
@@ -1156,7 +1167,7 @@ int main()
 
 #if 1
         // tx done, start to receive
-        printf("wait for report packet ...\n");
+        syslog(LOG_DEBUG, "wait for report packet ...\n");
         // usleep(LORA_WAIT_FOR_RECEIVE_MS*100);
         memset(rxbuf, 0, sizeof(rxbuf));
         lora_rx_done = false;
@@ -1181,7 +1192,7 @@ int main()
             // get data, send out ACK
             if (modem.rx.data.CRC)
             {
-                printf(">>rxcrcerror\n");
+                syslog(LOG_DEBUG, ">>rx crc error\n");
             }
             else
             {
@@ -1198,28 +1209,28 @@ int main()
                 if (report_packet.package_StartMark == TYPE_REPORT)
                 {
                     // send out ACK
-                    printf(">>RPT: %u ", time(NULL));
+                    syslog(LOG_DEBUG, ">>RPT: %u ", time(NULL));
                     for (i = 0; i < sizeof(report_packet); i++)
                     {
-                        printf("%02x ", rxbuf[i]);
+                        syslog(LOG_DEBUG, "%02x ", rxbuf[i]);
                     }
-                    printf("\n");
+                    syslog(LOG_DEBUG, "\n");
 #if 1
-                    printf("startmark=0x%x ", report_packet.package_StartMark);
-                    printf("len=%d ", report_packet.length);
-                    printf("unitAddr=0x%x ", report_packet.SendUnitAddress);
-                    printf("send_seq=0x%x ", report_packet.SendUnit_SeqCounter);
-                    printf("evnt_type=0x%x ", report_packet.Event_Type);
-                    printf("timestamp=%lu ", report_packet.Event_timeStamp);
-                    printf("trainID=0x%x ", report_packet.TrainID);
-                    printf("%x ", report_packet.TrainNumber1);
-                    printf("%x ", report_packet.TrainNumber2);
-                    printf("%x ", report_packet.TrainNumber3);
-                    printf("Username=[%s] ", report_packet.UserName);
-                    printf("UserID=[%s] ", report_packet.UserIdNum);
-                    printf("APP_ID=0x%x ", report_packet.AP_ID);
-                    printf("BatVol=%d ", report_packet.BatVoltage);
-                    printf("resve=0x%x\n", report_packet.reserved);
+                    syslog(LOG_DEBUG, "startmark=0x%x ", report_packet.package_StartMark);
+                    syslog(LOG_DEBUG, "len=%d ", report_packet.length);
+                    syslog(LOG_DEBUG, "unitAddr=0x%x ", report_packet.SendUnitAddress);
+                    syslog(LOG_DEBUG, "send_seq=0x%x ", report_packet.SendUnit_SeqCounter);
+                    syslog(LOG_DEBUG, "evnt_type=0x%x ", report_packet.Event_Type);
+                    syslog(LOG_DEBUG, "timestamp=%lu ", report_packet.Event_timeStamp);
+                    syslog(LOG_DEBUG, "trainID=0x%x ", report_packet.TrainID);
+                    syslog(LOG_DEBUG, "%x ", report_packet.TrainNumber1);
+                    syslog(LOG_DEBUG, "%x ", report_packet.TrainNumber2);
+                    syslog(LOG_DEBUG, "%x ", report_packet.TrainNumber3);
+                    syslog(LOG_DEBUG, "Username=[%s] ", report_packet.UserName);
+                    syslog(LOG_DEBUG, "UserID=[%s] ", report_packet.UserIdNum);
+                    syslog(LOG_DEBUG, "APP_ID=0x%x ", report_packet.AP_ID);
+                    syslog(LOG_DEBUG, "BatVol=%d ", report_packet.BatVoltage);
+                    syslog(LOG_DEBUG, "resve=0x%x\n", report_packet.reserved);
 #endif
                     if (MOBILE_REPORT_EVENT_1 == report_packet.Event_Type)
                     {
@@ -1276,14 +1287,14 @@ int main()
                         sprintf(mqtt_message, "%s;reserved=%u", mqtt_message,
                                 report_packet.reserved);
 #endif
-                        printf("%llu +MQTT %s-%s \n", current_timestamp(),
+                        syslog(LOG_DEBUG, "%llu +MQTT %s-%s \n", current_timestamp(),
                                mqtt_topic, mqtt_message);
                         mqtt_publish_message(mqtt_topic, mqtt_message);
-                        printf("%llu -MQTT\n", current_timestamp());
+                        syslog(LOG_DEBUG, "%llu -MQTT\n", current_timestamp());
                     }
                     else
                     {
-                        printf("Unsupport RPT type %d\n",
+                        syslog(LOG_DEBUG, "Unsupport RPT type %d\n",
                                report_packet.Event_Type);
                     }
 
@@ -1300,10 +1311,10 @@ int main()
                     // ack_packet.AP_Address++;
                     modem.tx.data.size = sizeof(ack_packet) + 1; // Payload len
 #if 1
-                    printf("<<ACK:");
+                    syslog(LOG_DEBUG, "<<ACK:");
                     for (i = 0; i < sizeof(ack_packet); i++)
                     {
-                        printf("%02x ", i, txbuf[i]);
+                        syslog(LOG_DEBUG, "%02x ", i, txbuf[i]);
                     }
 // printf("\n");
 #endif
@@ -1315,20 +1326,20 @@ int main()
                     lora_tx_done = false;
                     LoRa_send(&modem);
 
-                    printf("<<%llu Sending ACK 0x%x length=%d Tsym=%f Tpkt=%f "
+                    syslog(LOG_DEBUG, "<<%llu Sending ACK 0x%x length=%d Tsym=%f Tpkt=%f "
                            "payloadSymbNb=%u\n",
                            current_timestamp(), ack_packet.AP_Address,
                            modem.tx.data.size, modem.tx.data.Tsym,
                            modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
 
-                    printf("<<sleep %u ms to transmitt complete %llu\n",
+                    syslog(LOG_DEBUG, "<<sleep %u ms to transmitt complete %llu\n",
                            (unsigned long)modem.tx.data.Tpkt,
                            current_timestamp());
                     usleep((unsigned long)(modem.tx.data.Tpkt * 1000) + 500);
 
                     while (!lora_tx_done)
                     {
-                        printf("<<wait..\n");
+                        syslog(LOG_DEBUG, "<<wait..\n");
                         usleep(1000 * 40);
                     }
 
@@ -1342,7 +1353,7 @@ int main()
                 }
                 else
                 {
-                    printf(" invalide packet %x\n",
+                    syslog(LOG_DEBUG, " invalide packet %x\n",
                            report_packet.package_StartMark);
                     usleep((random() % 300) * 1000);
                 }
@@ -1387,13 +1398,13 @@ int main()
         }
         else
         {
-            printf("NORPT\n");
+            syslog(LOG_DEBUG, "NORPT\n");
             usleep((random() % 300) * 1000);
         }
 #endif
     }
 
-    printf("END\n");
+    syslog(LOG_DEBUG, "END\n");
 
     LoRa_end(&modem);
 }
