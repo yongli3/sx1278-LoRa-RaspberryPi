@@ -1,125 +1,149 @@
-#include "LoRa.h"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <mosquitto.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <sys/ioctl.h>
-#include <netinet/in.h>
-#include <net/if.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <termios.h>
-#include <errno.h>
-#include<pthread.h>
-#include <sys/time.h>
-#include <sqlite3.h>
-#include <mosquitto.h>
-#include <syslog.h>
+#include <sys/socket.h>
 #include <sys/sysinfo.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <syslog.h>
+#include <termios.h>
+#include <unistd.h>
+#include <usb.h>
 
-#define WWW_INTERNAL	120
+#define WWW_INTERNAL 120
 #define MQTT_HOST "202.120.26.119"
 #define MQTT_PORT 1883
 
-#define DB_NAME  "rawdata.db"
+#define DB_NAME "rawdata.db"
 
 static bool connected = true;
-static sqlite3 *db = NULL;
+static sqlite3* db = NULL;
 
-void tx_f(txData *tx){
-    syslog(LOG_NOTICE, "tx done %u\n", (unsigned)time(NULL));
+static long long current_timestamp()
+{
+    struct timeval te;
+    gettimeofday(&te, NULL); // get current time
+    // long long milliseconds = te.tv_sec*1000*1000LL + te.tv_usec; // calculate
+    // microseconds
+    long long microseconds = te.tv_sec * 1000LL + te.tv_usec / 1000;
+    // printf("%lld\n", te.tv_usec);
+    return microseconds;
 }
 
-static void connect_callback(struct mosquitto *mosq, void *obj, int result)
+static void connect_callback(struct mosquitto* mosq, void* obj, int result)
 {
     syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
 }
 
-static void mqttqos_connect_callback(struct mosquitto *mosq, void *obj, int result)
+static void mqttqos_connect_callback(struct mosquitto* mosq, void* obj,
+                                     int result)
 {
     syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-	
-} 
-
-static void mqttqos_disconnect_callback(struct mosquitto *mosq, void *obj, int result)
-{
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-	//connected = false;
 }
 
-static void mqttqos_message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message)
+static void mqttqos_disconnect_callback(struct mosquitto* mosq, void* obj,
+                                        int result)
+{
+    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
+    // connected = false;
+}
+
+static void mqttqos_message_callback(struct mosquitto* mosq, void* obj,
+                                     const struct mosquitto_message* message)
 {
     bool match = 0;
-    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n", message->payloadlen, (char*) message->payload, message->topic);
+    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n",
+           message->payloadlen, (char*)message->payload, message->topic);
 
-    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic, &match);
-    if (match) {
+    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic,
+                                &match);
+    if (match)
+    {
         syslog(LOG_NOTICE, "got message for ADC topic\n");
     }
 }
 
-static void mqttqos_publish_callback(struct mosquitto *mosq, void *obj, int result)
+static void mqttqos_publish_callback(struct mosquitto* mosq, void* obj,
+                                     int result)
 {
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-	mosquitto_disconnect((struct mosquitto *)obj);
+    syslog(LOG_NOTICE, "+%s rc=%d\n", __func__, result);
+    mosquitto_disconnect((struct mosquitto*)obj);
 }
 
-static void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message)
+static void message_callback(struct mosquitto* mosq, void* obj,
+                             const struct mosquitto_message* message)
 {
     bool match = 0;
-    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n", message->payloadlen, (char*) message->payload, message->topic);
+    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n",
+           message->payloadlen, (char*)message->payload, message->topic);
 
-    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic, &match);
-    if (match) {
+    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic,
+                                &match);
+    if (match)
+    {
         syslog(LOG_NOTICE, "got message for ADC topic\n");
     }
 }
 
-static void mosq_log_callback(struct mosquitto *mosq, void *userdata, int level, const char *str)
+static void mosq_log_callback(struct mosquitto* mosq, void* userdata, int level,
+                              const char* str)
 {
     /* Pring all log messages regardless of level. */
-  
-  switch(level){
-    case MOSQ_LOG_DEBUG:
-    case MOSQ_LOG_INFO:
-    case MOSQ_LOG_NOTICE:
-    case MOSQ_LOG_WARNING:
-    case MOSQ_LOG_ERR: {
-      syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
+
+    switch (level)
+    {
+        case MOSQ_LOG_DEBUG:
+        case MOSQ_LOG_INFO:
+        case MOSQ_LOG_NOTICE:
+        case MOSQ_LOG_WARNING:
+        case MOSQ_LOG_ERR:
+        {
+            syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
+        }
     }
-  }
 }
 
-static void mqttqos_log_callback(struct mosquitto *mosq, void *userdata, int level, const char *str)
+static void mqttqos_log_callback(struct mosquitto* mosq, void* userdata,
+                                 int level, const char* str)
 {
     /* Pring all log messages regardless of level. */
-  
-  switch(level){
-    case MOSQ_LOG_DEBUG:
-    case MOSQ_LOG_INFO:
-    case MOSQ_LOG_NOTICE:
-    case MOSQ_LOG_WARNING:
-    case MOSQ_LOG_ERR: {
-      //syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
+
+    switch (level)
+    {
+        case MOSQ_LOG_DEBUG:
+        case MOSQ_LOG_INFO:
+        case MOSQ_LOG_NOTICE:
+        case MOSQ_LOG_WARNING:
+        case MOSQ_LOG_ERR:
+        {
+            // syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
+        }
     }
-  }
 }
 
 // topic=[test5-2018-08-10 21:31:39] message=[IP=10.101.152.177;UP=10183]
-static int mqtt_publish_message(char *topic, char *message)
+static int mqtt_publish_message(char* topic, char* message)
 {
     char msg[256];
     char clientid[255];
-    struct mosquitto *mosq = NULL;
+    struct mosquitto* mosq = NULL;
     int ret = 0;
-	char command[255];
-	char hostname[64];
-	bool clean_session = true;
+    char command[255];
+    char hostname[64];
+    bool clean_session = true;
 
-    syslog(LOG_NOTICE, "+%s topic=[%s] message=[%s]\n", __func__, topic, message);
+    syslog(LOG_NOTICE, "+%s topic=[%s] message=[%s]\n", __func__, topic,
+           message);
 
-	gethostname(hostname, sizeof(hostname));
+    gethostname(hostname, sizeof(hostname));
 
     mosquitto_lib_init();
 
@@ -128,18 +152,20 @@ static int mqtt_publish_message(char *topic, char *message)
 
     mosq = mosquitto_new(clientid, clean_session, 0);
 
-    if (mosq) {
+    if (mosq)
+    {
         mosquitto_log_callback_set(mosq, mqttqos_log_callback);
         mosquitto_connect_callback_set(mosq, mqttqos_connect_callback);
-	    mosquitto_disconnect_callback_set(mosq, mqttqos_disconnect_callback);
+        mosquitto_disconnect_callback_set(mosq, mqttqos_disconnect_callback);
         mosquitto_message_callback_set(mosq, mqttqos_message_callback);
-    	mosquitto_publish_callback_set(mosq, mqttqos_publish_callback);
-	
+        mosquitto_publish_callback_set(mosq, mqttqos_publish_callback);
+
         ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
 
-        if (ret) {
+        if (ret)
+        {
             syslog(LOG_ERR, "MQTT %s connect error!\n", MQTT_HOST);
-			return -1;
+            return -1;
         }
 
 #if 0
@@ -150,47 +176,51 @@ static int mqtt_publish_message(char *topic, char *message)
 		} while (ret == MOSQ_ERR_SUCCESS && connected);
 #endif
 
-		ret = mosquitto_loop_start(mosq);
-		if (ret != MOSQ_ERR_SUCCESS) {
-			syslog(LOG_ERR, "LOOP fail!\n");
-			return -1;		
-		}
+        ret = mosquitto_loop_start(mosq);
+        if (ret != MOSQ_ERR_SUCCESS)
+        {
+            syslog(LOG_ERR, "LOOP fail!\n");
+            return -1;
+        }
 
-		syslog(LOG_NOTICE, "publish message=[%s] len=%d size=%d\n", message, strlen(message), sizeof(message));
+        syslog(LOG_NOTICE, "publish message=[%s] len=%d size=%d\n", message,
+               strlen(message), sizeof(message));
         mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
 
-		mosquitto_loop_stop(mosq, false);
-        
-    	mosquitto_destroy(mosq);
-    } else {
+        mosquitto_loop_stop(mosq, false);
+
+        mosquitto_destroy(mosq);
+    }
+    else
+    {
         syslog(LOG_ERR, "mosq new fail!\n");
     }
 
     mosquitto_lib_cleanup();
 
-	syslog(LOG_NOTICE, "-%s\n", __func__);
+    syslog(LOG_NOTICE, "-%s\n", __func__);
 
     return 0;
 }
 
-static int mqtt_test(char *topic, char *message)
+static int mqtt_test(char* topic, char* message)
 {
     char msg[256];
     char clientid[24];
-    struct mosquitto *mosq = NULL;
+    struct mosquitto* mosq = NULL;
     int ret = 0;
-	char command[255];
+    char command[255];
 
     syslog(LOG_NOTICE, "+%s %s-%s\n", __func__, topic, message);
 
-	// for double safe use system command to send
+    // for double safe use system command to send
 
-	sprintf(command, "mosquitto_pub -t \"%s\" -m \"%s;\" -h %s", topic, message, MQTT_HOST);
+    sprintf(command, "mosquitto_pub -t \"%s\" -m \"%s;\" -h %s", topic, message,
+            MQTT_HOST);
 
+    ret = system(command);
+    syslog(LOG_NOTICE, "exec [%s] return %d\n", command, ret);
 
-	ret = system(command);
-	syslog(LOG_NOTICE, "exec [%s] return %d\n", command, ret);
-    
     mosquitto_lib_init();
 
     memset(clientid, 0, sizeof(clientid));
@@ -198,31 +228,36 @@ static int mqtt_test(char *topic, char *message)
 
     mosq = mosquitto_new(clientid, true, 0);
 
-    if (mosq) {
+    if (mosq)
+    {
         mosquitto_log_callback_set(mosq, mosq_log_callback);
         mosquitto_connect_callback_set(mosq, connect_callback);
         mosquitto_message_callback_set(mosq, message_callback);
-    
+
         ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
 
-        if (ret) {
+        if (ret)
+        {
             syslog(LOG_ERR, "MQTT %s connect error!\n", MQTT_HOST);
-			return -1;
+            return -1;
         }
 
         ret = mosquitto_loop_start(mosq);
-        if (ret != MOSQ_ERR_SUCCESS) {
+        if (ret != MOSQ_ERR_SUCCESS)
+        {
             syslog(LOG_ERR, "LOOP fail!\n");
         }
 
-        //while (1) 
-        {        
-            //sprintf(message, "%s-%d\n", message, current_timestamp());
-            syslog(LOG_NOTICE, "message=[%s] len=%d size=%d\n", message, strlen(message), sizeof(message));
-            //mosquitto_subscribe(mosq, NULL, "/devices/wb-adc/controls/+", 0);
-            mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
-            //break;
-            //usleep(1000*1000);
+        // while (1)
+        {
+            // sprintf(message, "%s-%d\n", message, current_timestamp());
+            syslog(LOG_NOTICE, "message=[%s] len=%d size=%d\n", message,
+                   strlen(message), sizeof(message));
+            // mosquitto_subscribe(mosq, NULL, "/devices/wb-adc/controls/+", 0);
+            mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0,
+                              0);
+            // break;
+            // usleep(1000*1000);
         }
 #if 0
         while (true) {
@@ -233,223 +268,280 @@ static int mqtt_test(char *topic, char *message)
                 mosquitto_reconnect(mosq);
             }
         }
-#endif    
-    mosquitto_destroy(mosq);
-    } else {
+#endif
+        mosquitto_destroy(mosq);
+    }
+    else
+    {
         syslog(LOG_ERR, "mosq new fail!\n");
     }
 
     mosquitto_lib_cleanup();
 
-	syslog(LOG_NOTICE, "publish message [%s] okay!\n", message);
+    syslog(LOG_NOTICE, "publish message [%s] okay!\n", message);
 
     return 0;
 }
 
-static int callbackInsert(void *NotUsed, int argc, char **argv, char **colName) {
+static int callbackInsert(void* NotUsed, int argc, char** argv, char** colName)
+{
     syslog(LOG_NOTICE, "+%s\n", __func__);
     return 0;
 }
 
-static int callbackSelect(void *NotUsed, int argc, char **argv, char **colName) {
+static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
+{
     char sqlString[256];
-     char *errMsg = NULL;
-     int ret = -1;
+    char* errMsg = NULL;
+    int ret = -1;
     int i;
-    //argc= column number argv=column value
+    // argc= column number argv=column value
     syslog(LOG_NOTICE, "+%s argc=%d ID=%s\n", __func__, argc, argv[0]);
 
     // send this record to MQTT server, and set local = 0
 
-
-    sqlite3_mutex_enter(sqlite3_db_mutex(db));    
+    sqlite3_mutex_enter(sqlite3_db_mutex(db));
     sprintf(sqlString, "UPDATE raw set %s = 0;", colName[3]);
-        ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
-        if( ret != SQLITE_OK)
-                {
-                    syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
-                    return -1;
-                } 
-                else
-                {
-                    syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
-                }
+    ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
+    if (ret != SQLITE_OK)
+    {
+        syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
+               sqlite3_errmsg(db));
+        return -1;
+    }
+    else
+    {
+        syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
+    }
 
-    
     sqlite3_mutex_leave(sqlite3_db_mutex(db));
 
 #if 0
     for (i = 0; i < argc; i++) {
         printf("%d:%s-%s\n", i, argv[i], colName[i]);
     }
-#endif    
-    //argv[0]; colName[0]
-    //UPDATE tblStuff SET name = 'Temperature10' WHERE name = 'Temperature1'
+#endif
+    // argv[0]; colName[0]
+    // UPDATE tblStuff SET name = 'Temperature10' WHERE name = 'Temperature1'
 
     return 0;
 }
 
-void *threadFun1(void *ptr)
+void* threadFun1(void* ptr)
 {
     char sqlString[256];
-    char *errMsg = NULL;
+    char* errMsg = NULL;
     int ret = -1;
 
-    int type = (int) ptr;
-    fprintf(stderr,"Thread1 - %d\n",type);
+    int type = (int)ptr;
+    fprintf(stderr, "Thread1 - %d\n", type);
 
-while (1) {
-    sqlite3_mutex_enter(sqlite3_db_mutex(db));
-    // Perform some queries on the database
-    sprintf(sqlString, "INSERT INTO raw(time, message, local) VALUES ('%llu','%s', 1);",
-                                                            current_timestamp(), "lora");
+    while (1)
+    {
+        sqlite3_mutex_enter(sqlite3_db_mutex(db));
+        // Perform some queries on the database
+        sprintf(
+            sqlString,
+            "INSERT INTO raw(time, message, local) VALUES ('%llu','%s', 1);",
+            current_timestamp(), "lora");
         ret = sqlite3_exec(db, sqlString, callbackInsert, NULL, &errMsg);
-        if( ret != SQLITE_OK)
-                {
-                    syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
-                } 
-                else
-                {
-                    syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
-                }
+        if (ret != SQLITE_OK)
+        {
+            syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
+                   sqlite3_errmsg(db));
+        }
+        else
+        {
+            syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
+        }
 
-    
-    sqlite3_mutex_leave(sqlite3_db_mutex(db));
-    usleep(1000000);
-}   
-    return  ptr;
+        sqlite3_mutex_leave(sqlite3_db_mutex(db));
+        usleep(1000000);
+    }
+    return ptr;
 }
 
-void *threadFun2(void *ptr)
+void* threadFun2(void* ptr)
 {
     char sqlString[256];
-     int ret = -1;
-     char *errMsg = NULL;
-    int type = (int) ptr;
-    fprintf(stderr,"Thread2 - %d\n",type);
+    int ret = -1;
+    char* errMsg = NULL;
+    int type = (int)ptr;
+    fprintf(stderr, "Thread2 - %d\n", type);
 
-while (1) {
-    sqlite3_mutex_enter(sqlite3_db_mutex(db));
-    // Perform some queries on the database
-    // query all local=1; send out and set local=0
-    sprintf(sqlString, "SELECT * from raw where local=1;");
+    while (1)
+    {
+        sqlite3_mutex_enter(sqlite3_db_mutex(db));
+        // Perform some queries on the database
+        // query all local=1; send out and set local=0
+        sprintf(sqlString, "SELECT * from raw where local=1;");
         ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
-        if( ret != SQLITE_OK)
-                {
-                    syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
-                } 
-                else
-                {
-                    syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
-                }
-
-    
-    sqlite3_mutex_leave(sqlite3_db_mutex(db));
-    usleep(1000);
-}    
-    return  ptr;
-}
-
-static int set_interface_attribs (int fd, int speed, int parity)
-{
-        struct termios tty;
-        memset (&tty, 0, sizeof tty);
-        if (tcgetattr (fd, &tty) != 0)
+        if (ret != SQLITE_OK)
         {
-                printf("error %d from tcgetattr", errno);
-                return -1;
+            syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
+                   sqlite3_errmsg(db));
+        }
+        else
+        {
+            syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
         }
 
-        cfsetospeed (&tty, speed);
-        cfsetispeed (&tty, speed);
-
-        tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;     // 8-bit chars
-        // disable IGNBRK for mismatched speed tests; otherwise receive break
-        // as \000 chars
-        tty.c_iflag &= ~IGNBRK;         // disable break processing
-        tty.c_lflag = 0;                // no signaling chars, no echo,
-                                        // no canonical processing
-        tty.c_oflag = 0;                // no remapping, no delays
-        tty.c_cc[VMIN]  = 0;            // read doesn't block
-        tty.c_cc[VTIME] = 5;            // 0.5 seconds read timeout
-
-        tty.c_iflag &= ~(IXON | IXOFF | IXANY); // shut off xon/xoff ctrl
-
-        tty.c_cflag |= (CLOCAL | CREAD);// ignore modem controls,
-                                        // enable reading
-        tty.c_cflag &= ~(PARENB | PARODD);      // shut off parity
-        tty.c_cflag |= parity;
-        tty.c_cflag &= ~CSTOPB;
-        tty.c_cflag &= ~CRTSCTS;
-
-        if (tcsetattr (fd, TCSANOW, &tty) != 0)
-        {
-                printf ("error %d from tcsetattr", errno);
-                return -1;
-        }
-        return 0;
+        sqlite3_mutex_leave(sqlite3_db_mutex(db));
+        usleep(1000);
+    }
+    return ptr;
 }
 
-static void set_blocking (int fd, int should_block)
+static int set_interface_attribs(int fd, int speed, int parity)
 {
-        struct termios tty;
-        memset (&tty, 0, sizeof tty);
-        if (tcgetattr (fd, &tty) != 0)
-        {
-                printf ("error %d from tggetattr", errno);
-                return;
-        }
+    struct termios tty;
+    memset(&tty, 0, sizeof tty);
+    if (tcgetattr(fd, &tty) != 0)
+    {
+        printf("error %d from tcgetattr", errno);
+        return -1;
+    }
 
-        tty.c_cc[VMIN]  = should_block ? 1 : 0;
-        tty.c_cc[VTIME] = 10;            // 0.5 seconds read timeout
+    cfsetospeed(&tty, speed);
+    cfsetispeed(&tty, speed);
 
-        if (tcsetattr (fd, TCSANOW, &tty) != 0)
-                printf ("error %d setting term attributes", errno);
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8-bit chars
+    // disable IGNBRK for mismatched speed tests; otherwise receive break
+    // as \000 chars
+    tty.c_iflag &= ~IGNBRK; // disable break processing
+    tty.c_lflag = 0;        // no signaling chars, no echo,
+                            // no canonical processing
+    tty.c_oflag = 0;        // no remapping, no delays
+    tty.c_cc[VMIN] = 0;     // read doesn't block
+    tty.c_cc[VTIME] = 5;    // 0.5 seconds read timeout
+
+    tty.c_iflag &= ~(IXON | IXOFF | IXANY); // shut off xon/xoff ctrl
+
+    tty.c_cflag |= (CLOCAL | CREAD);   // ignore modem controls,
+                                       // enable reading
+    tty.c_cflag &= ~(PARENB | PARODD); // shut off parity
+    tty.c_cflag |= parity;
+    tty.c_cflag &= ~CSTOPB;
+    tty.c_cflag &= ~CRTSCTS;
+
+    if (tcsetattr(fd, TCSANOW, &tty) != 0)
+    {
+        printf("error %d from tcsetattr", errno);
+        return -1;
+    }
+    return 0;
 }
 
-static int get_ipaddress(char *ipaddress, int size)
+static void set_blocking(int fd, int should_block)
+{
+    struct termios tty;
+    memset(&tty, 0, sizeof tty);
+    if (tcgetattr(fd, &tty) != 0)
+    {
+        printf("error %d from tggetattr", errno);
+        return;
+    }
+
+    tty.c_cc[VMIN] = should_block ? 1 : 0;
+    tty.c_cc[VTIME] = 10; // 0.5 seconds read timeout
+
+    if (tcsetattr(fd, TCSANOW, &tty) != 0)
+        printf("error %d setting term attributes", errno);
+}
+
+static int get_ipaddress(char* ipaddress, int size)
 {
 
-	int fd = 1;
-	 struct ifreq ifr;
-	  
-	 char iface[] = "eth1";
-	  
-	 fd = socket(AF_INET, SOCK_DGRAM, 0);
-	
-	 //Type of address to retrieve - IPv4 IP address
-	 ifr.ifr_addr.sa_family = AF_INET;
-	
-	 //Copy the interface name in the ifreq structure
-	 strncpy(ifr.ifr_name , iface , IFNAMSIZ-1);
-	
-	 ioctl(fd, SIOCGIFADDR, &ifr);
-	
-	 close(fd);
-	
-	 //display result
-	 strcpy(ipaddress, inet_ntoa(( (struct sockaddr_in *)&ifr.ifr_addr )->sin_addr));
-	 printf("%s - %s\n" , iface , ipaddress);
+    int fd = 1;
+    struct ifreq ifr;
 
-	return 0;
+    char iface[] = "eth1";
 
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    // Type of address to retrieve - IPv4 IP address
+    ifr.ifr_addr.sa_family = AF_INET;
+
+    // Copy the interface name in the ifreq structure
+    strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
+
+    ioctl(fd, SIOCGIFADDR, &ifr);
+
+    close(fd);
+
+    // display result
+    strcpy(ipaddress,
+           inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr));
+    syslog(LOG_DEBUG, "%s - %s\n", iface, ipaddress);
+
+    return 0;
 }
 
 int time_test()
 {
-  time_t rawtime;
-  struct tm * timeinfo;
+    time_t rawtime;
+    struct tm* timeinfo;
 
-  time (&rawtime);
-  timeinfo = localtime(&rawtime);
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
 
-  printf("%04d-%02d-%02d %02d:%02d:%02d\n", 
-  	timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
-  	timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-  
-  printf ("Current local time and date: %s", asctime(timeinfo));
+    printf("%04d-%02d-%02d %02d:%02d:%02d\n", timeinfo->tm_year + 1900,
+           timeinfo->tm_mon + 1, timeinfo->tm_mday, timeinfo->tm_hour,
+           timeinfo->tm_min, timeinfo->tm_sec);
 
-  return 0;
+    printf("Current local time and date: %s", asctime(timeinfo));
+
+    return 0;
+}
+
+static int reset_usb_main(int argc, char* argv[])
+{
+    struct usb_bus* busses;
+    usb_init();
+    usb_find_busses();
+    usb_find_devices();
+    busses = usb_get_busses();
+    struct usb_bus* bus;
+    int c, i, a;
+    for (bus = busses; bus; bus = bus->next)
+    {
+        struct usb_device* dev;
+        int val;
+        usb_dev_handle* junk;
+        for (dev = bus->devices; dev; dev = dev->next)
+        {
+            char buf[1024];
+            junk = usb_open(dev);
+            usb_get_string_simple(junk, 2, buf, 1023);
+            switch (argc)
+            {
+                case 1:
+                    if (junk == NULL)
+                    {
+                        printf("Can't open %p (%s)\n", dev, buf);
+                    }
+                    else if (strcmp(buf, "HD Pro Webcam C920") == 0)
+                    {
+                        val = usb_reset(junk);
+                        printf("reset %p %d (%s)\n", dev, val, buf);
+                    }
+                    break;
+
+                default:
+                    if (junk == NULL)
+                    {
+                        syslog(LOG_ERR, "Can't open %p (%s)\n", dev, buf);
+                    }
+                    else
+                    {
+                        val = usb_reset(junk);
+                        syslog(LOG_INFO, "reset %p %d (%s)\n", dev, val, buf);
+                    }
+            }
+
+            usb_close(junk);
+        }
+    }
 }
 
 static int www_connect()
@@ -461,185 +553,221 @@ static int www_connect()
     char write_buffer[256];
     char read_buffer[256];
     char mqtt_message[256];
-	char mqtt_topic[256];
-	char hostname[255];
-	char ipaddress[255];
-    char *portname = "/dev/ttyUSB0";
+    char mqtt_topic[256];
+    char hostname[255];
+    char ipaddress[255];
+    char* portname = "/dev/ttyUSB0";
+    int fd = -1;
 
-	time_t rawtime;
-  	struct tm * timeinfo;
-	struct sysinfo info;
+    time_t rawtime;
+    struct tm* timeinfo;
+    struct sysinfo info;
 
-
-	
-	
-    int fd = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
-    if (fd < 0)
+    repeat_count = 0;
+    while (1)
     {
-   		syslog(LOG_ERR, "error %d opening %s: %s", errno, portname, strerror (errno));
-		system("reboot -f");
-        return -1;
-    }
-    
-    set_interface_attribs(fd, B115200, 0);  // set speed to 115,200 bps, 8n1 (no parity)
-    set_blocking(fd, 0);                // set no blocking
-    
-    while (0)
-    {
-    write (fd, "ATE0\r\n", 7);           // send 7 character greeting
-    
-    //sleep(1);
-    usleep ((7 + 25) * 1000);             // sleep enough to transmit the 7 plus
-                                         // receive 25:  approx 100 uS per char transmit
-    char buf [100];
-    
-    memset(buf, 0, sizeof(buf));
-    
-    int n = read(fd, buf, sizeof(buf));  // read up to 100 characters if ready to read
-    
-    printf("read %d buf=%s\n", n, buf);
-    sleep(1);
+        fd = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
+        if (fd < 0)
+        {
+            syslog(LOG_ERR, "%d Opening %s error %d(%s)", repeat_count,
+                   portname, errno, strerror(errno));
+            repeat_count++;
+            if (repeat_count > 5)
+            {
+                syslog(LOG_ERR, "Opening %s error %d(%s)! return...", portname,
+                       errno, strerror(errno));
+                return -1;
+                //sync();
+                //system("reboot -f");
+            }
+            reset_usb_main(2, NULL);
+            sleep(10);
+        } else {
+            break;
+        }
     }
 
-    while (1) {
+    set_interface_attribs(fd, B115200,
+                          0); // set speed to 115,200 bps, 8n1 (no parity)
+    set_blocking(fd, 0);      // set no blocking
+
+    repeat_count = 0;
+    while (1)
+    {
+        memset(write_buffer, 0, sizeof(write_buffer));
+
+        // echo disable
+        sprintf(write_buffer, "%s", "ATE0\r\n");
+        size = write(fd, write_buffer, strlen(write_buffer));
+        tcflush(fd, TCIOFLUSH);
+        syslog(LOG_DEBUG, "write [%s] %d\n", write_buffer, size);
+        // usleep (size * 1000);
+        sleep(1);
+        memset(read_buffer, 0, sizeof(read_buffer));
+        size = read(fd, read_buffer, sizeof(read_buffer));
+        syslog(LOG_DEBUG, "read %d [%s]\n", size, read_buffer);
+
+        // for (i = 0; i < size; i++)
+        // printf("%x\n", read_buffer[i]);
+
+        if (strstr(read_buffer, "OK"))
+        {
+            syslog(LOG_DEBUG, "Modem OK\n");
+            break;
+        }
+        else
+        {
+            if (repeat_count > 5)
+            {
+                syslog(LOG_ERR, "MODEM ATE0 fail!\n");
+                goto cleanup;
+            }
+        };
+        repeat_count++;
+        sleep(1);
+    }
+
+    // Get IMEI
     memset(write_buffer, 0, sizeof(write_buffer));
-    sprintf(write_buffer, "%s", "ATE0\r\n");
-    size = write(fd,write_buffer,strlen(write_buffer));
-    tcflush(fd, TCIOFLUSH);
-    printf("write %s %d\n", write_buffer, size);
-    //usleep (size * 1000);
+    sprintf(write_buffer, "%s", "AT+CGSN\r\n");
+    size = write(fd, write_buffer, strlen(write_buffer));
+    tcflush(fd, TCOFLUSH);
+    syslog(LOG_DEBUG, "write [%s] %d\n", write_buffer, size);
     sleep(1);
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    syslog(LOG_DEBUG, "read %d [%s]\n", size, read_buffer);
+
+    // Get CIMI
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+CIMI\r\n");
+    size = write(fd, write_buffer, strlen(write_buffer));
+    tcflush(fd, TCOFLUSH);
+    syslog(LOG_DEBUG, "write %s %d\n", write_buffer, size);
+    sleep(1);
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    syslog(LOG_DEBUG, "read %d [%s]\n", size, read_buffer);
+
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+CFUN=0\r\n");
+    size = write(fd, write_buffer, strlen(write_buffer));
+    tcflush(fd, TCOFLUSH);
+    syslog(LOG_DEBUG, "write %s %d\n", write_buffer, size);
+    sleep(4);
     memset(read_buffer, 0, sizeof(read_buffer));
     size = read(fd, read_buffer, sizeof(read_buffer));
-    printf("read %d [%s]\n", size, read_buffer);
-
-    //for (i = 0; i < size; i++)
-       //printf("%x\n", read_buffer[i]);
-
-    if (strstr(read_buffer, "OK")) {
-        printf("Modem OK\n");
-        break;
-    } else {
-        if (repeat_count > 5) {
-            syslog(LOG_ERR, "MODEM ATE0 fail!\n");
-            goto cleanup;
-        }
+    syslog(LOG_DEBUG, "read %d [%s]\n", size, read_buffer);
+    if (NULL == strstr(read_buffer, "OK"))
+    {
+        syslog(LOG_ERR, "command %s error !\n", write_buffer);
+        goto cleanup;
     };
-    repeat_count++;
-    sleep(1);
-}
 
-memset(write_buffer, 0, sizeof(write_buffer));
-sprintf(write_buffer, "%s", "AT+CFUN=0\r\n");
-size = write(fd,write_buffer,strlen(write_buffer));
-tcflush(fd, TCOFLUSH);
-printf("write %s %d\n", write_buffer, size);
-sleep(4);
-memset(read_buffer, 0, sizeof(read_buffer));
-size = read(fd, read_buffer, sizeof(read_buffer));
-printf("read %d [%s]\n", size, read_buffer);    
-if (NULL == strstr(read_buffer, "OK")) {
-    syslog(LOG_ERR, "command %s error !\n", write_buffer);
-    goto cleanup;
-};
-
-memset(write_buffer, 0, sizeof(write_buffer));
-sprintf(write_buffer, "%s", "AT+CFUN=1\r\n");
-size = write(fd,write_buffer,strlen(write_buffer));
-tcflush(fd, TCOFLUSH);
-printf("write %s %d\n", write_buffer, size);
-sleep(7);
-memset(read_buffer, 0, sizeof(read_buffer));
-size = read(fd, read_buffer, sizeof(read_buffer));
-printf("read %d [%s]\n", size, read_buffer);    
-if (NULL == strstr(read_buffer, "OK")) {
-    syslog(LOG_ERR, "command %s error !\n", write_buffer);
-    goto cleanup;
-};
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+CFUN=1\r\n");
+    size = write(fd, write_buffer, strlen(write_buffer));
+    tcflush(fd, TCOFLUSH);
+    syslog(LOG_DEBUG, "write %s %d\n", write_buffer, size);
+    sleep(5);
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    syslog(LOG_DEBUG, "read %d [%s]\n", size, read_buffer);
+    if (NULL == strstr(read_buffer, "OK"))
+    {
+        syslog(LOG_ERR, "command %s error !\n", write_buffer);
+        goto cleanup;
+    };
 
     memset(write_buffer, 0, sizeof(write_buffer));
     sprintf(write_buffer, "%s", "AT+CGACT=1,1\r\n");
     tcflush(fd, TCOFLUSH);
-    size = write(fd,write_buffer,strlen(write_buffer));
-    printf("write %s %d\n", write_buffer, size);
-    sleep(7);
+    size = write(fd, write_buffer, strlen(write_buffer));
+    syslog(LOG_DEBUG, "write %s %d\n", write_buffer, size);
+    sleep(5);
     memset(read_buffer, 0, sizeof(read_buffer));
     size = read(fd, read_buffer, sizeof(read_buffer));
-    printf("read %d [%s]\n", size, read_buffer);    
-    if (NULL == strstr(read_buffer, "OK")) {
+    syslog(LOG_DEBUG, "read %d [%s]\n", size, read_buffer);
+    if (NULL == strstr(read_buffer, "OK"))
+    {
         syslog(LOG_ERR, "command %s error !\n", write_buffer);
         goto cleanup;
     };
 
-    // +ZGIPDNS: 1,1,"IP","10.101.206.237","0.0.0.0","116.116.116.116","221.5.88.88"
-    //strcpy(mqtt_message, read_buffer);
+    // +ZGIPDNS:
+    // 1,1,"IP","10.101.206.237","0.0.0.0","116.116.116.116","221.5.88.88"
+    // strcpy(mqtt_message, read_buffer);
 
     memset(write_buffer, 0, sizeof(write_buffer));
     sprintf(write_buffer, "%s", "AT+ZGACT=1,1\r\n");
-    size = write(fd,write_buffer,strlen(write_buffer));
+    size = write(fd, write_buffer, strlen(write_buffer));
     tcflush(fd, TCOFLUSH);
-    printf("write %s %d\n", write_buffer, size);
-    sleep(7);
+    syslog(LOG_DEBUG, "write %s %d\n", write_buffer, size);
+    sleep(5);
     memset(read_buffer, 0, sizeof(read_buffer));
     size = read(fd, read_buffer, sizeof(read_buffer));
-    printf("read %d [%s]\n", size, read_buffer);    
+    syslog(LOG_DEBUG, "read %d [%s]\n", size, read_buffer);
 
-
-    if (NULL == strstr(read_buffer, "OK")) {
+    if (NULL == strstr(read_buffer, "OK"))
+    {
         syslog(LOG_ERR, "command %s error !\n", write_buffer);
         goto cleanup;
     }
 
-    //ret = system("ifconfig eth0 down");
-    //printf("system return %d\n", ret);
-    
-    ret = system("systemctl restart connman");   //system("udhcpc -i eth1");
-    printf("connman return %d\n", ret);
+    // ret = system("ifconfig eth0 down");
+    // printf("system return %d\n", ret);
 
-	sleep(3);
-	gethostname(hostname, sizeof(hostname));
+    // ret = system("systemctl restart connman"); // system("udhcpc -i eth1");
+    // syslog(LOG_DEBUG, "connman return %d\n", ret);
 
-	printf("hostname=%s\n", hostname);
+    sleep(3);
+    gethostname(hostname, sizeof(hostname));
 
-	//sprintf(hostname, "%s-network", hostname);
+    syslog(LOG_DEBUG, "hostname=%s\n", hostname);
 
-	ret = system("systemctl restart systemd-timesyncd.service");
-	printf("timesync return %d\n", ret);
+    // sprintf(hostname, "%s-network", hostname);
 
-	while (1) {
-		// send to systemd
-		printf("Checking network ...\n");
-		// check if internet is okay
-		
-		ret = system("ping 114.114.114.114 -c 1");
-		if (ret) {
-			syslog(LOG_ERR, "network error!\n");
-			break;
-		}
+    ret = system("systemctl restart systemd-timesyncd.service");
+    syslog(LOG_DEBUG, "timesync return %d\n", ret);
 
-		get_ipaddress(ipaddress, sizeof(ipaddress));
-		sysinfo(&info);
-		snprintf(mqtt_message, sizeof(mqtt_message), "IP=%s;UP=%lu", ipaddress, info.uptime);
-		//syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
+    while (1)
+    {
+#if 0
+        // send to systemd
+        syslog(LOG_DEBUG, "Checking network ...\n");
+        // check if internet is okay
 
-		time (&rawtime);
-		timeinfo = localtime(&rawtime);
+        ret = system("ping 114.114.114.114 -c 1");
+        if (ret)
+        {
+            syslog(LOG_ERR, "network error!\n");
+            break;
+        }
+#endif
+        get_ipaddress(ipaddress, sizeof(ipaddress));
+        sysinfo(&info);
+        snprintf(mqtt_message, sizeof(mqtt_message), "IP=%s;UP=%lu", ipaddress,
+                 info.uptime);
+        // syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message,
+        // hostname);
 
-		snprintf(mqtt_topic, sizeof(mqtt_topic), "%s-%04d-%02d-%02d %02d:%02d:%02d", hostname,
-		  timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
-		  timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+        time(&rawtime);
+        timeinfo = localtime(&rawtime);
 
-		ret = mqtt_publish_message(mqtt_topic, mqtt_message);
-		if (ret) {
-			syslog(LOG_ERR, "MQTT error!\n");
-			//break;
-		}
-		sleep(WWW_INTERNAL);
-	}    
-cleanup:    
+        snprintf(mqtt_topic, sizeof(mqtt_topic),
+                 "%s-%04d-%02d-%02d %02d:%02d:%02d", hostname,
+                 timeinfo->tm_year + 1900, timeinfo->tm_mon + 1,
+                 timeinfo->tm_mday, timeinfo->tm_hour, timeinfo->tm_min,
+                 timeinfo->tm_sec);
+
+        ret = mqtt_publish_message(mqtt_topic, mqtt_message);
+        if (ret)
+        {
+            syslog(LOG_ERR, "MQTT error!\n");
+            // break;
+        }
+        sleep(WWW_INTERNAL);
+    }
+cleanup:
     close(fd);
-
-
 
     return 0;
 }
@@ -841,23 +969,24 @@ cleanup:
 #endif
 
 #if 1
-int main() {
-//create a thread for sqlite reading, and publish to mqtt
-// create a thread for lora data RX, and write to local sqlite
-	int i = 0;
+int main()
+{
+    // create a thread for sqlite reading, and publish to mqtt
+    // create a thread for lora data RX, and write to local sqlite
+    int i = 0;
     int ret = 0;
     pthread_t thread1, thread2;
     int thr = 1;
     int thr2 = 2;
-    char *errMsg = NULL;
+    char* errMsg = NULL;
     sqlite3_mutex* mutex;
     char sqlString[256];
 
-	openlog("4G", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
+    openlog("4GConnect", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
 
-	syslog(LOG_NOTICE, "version %s", __DATE__);
+    syslog(LOG_INFO, "Built on %s %s", __DATE__, __TIME__);
 
-	i = 0;
+    i = 0;
 #if 0
 	while (1) {
 		sprintf(sqlString, "topic-%03d", i++);
@@ -866,6 +995,8 @@ int main() {
 	}
 #endif
     www_connect();
+
+    closelog();
     return 0;
 
     mqtt_test("topic", "message");
@@ -873,87 +1004,26 @@ int main() {
 
     ret = sqlite3_open(DB_NAME, &db);
 
-        if( ret != SQLITE_OK)
-        {
-            printf("Can't open database: %s\n", sqlite3_errmsg(db));
-            return -1;
-        } 
-        else
-        {
-            printf("Open database successfully\n");
-        }
-        // insert into raw (time, message) values(2, "aa");
+    if (ret != SQLITE_OK)
+    {
+        printf("Can't open database: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+    else
+    {
+        printf("Open database successfully\n");
+    }
+    // insert into raw (time, message) values(2, "aa");
 
     // start the threads
-    pthread_create(&thread1, NULL, *threadFun1, (void *) thr);
-    pthread_create(&thread2, NULL, *threadFun2, (void *) thr2);
+    pthread_create(&thread1, NULL, *threadFun1, (void*)thr);
+    pthread_create(&thread2, NULL, *threadFun2, (void*)thr2);
     // wait for threads to finish
-    pthread_join(thread1,NULL);
-    pthread_join(thread2,NULL);
+    pthread_join(thread1, NULL);
+    pthread_join(thread2, NULL);
 
     sqlite3_close(db);
     return 0;
 }
 #else
-int main(){
-
-char txbuf[128];
-LoRa_ctl modem;
-
-//See for typedefs, enumerations and there values in LoRa.h header file
-modem.spiCS = 0;//Raspberry SPI CE pin number
-modem.tx.callback = tx_f;
-modem.tx.data.buf = txbuf;
-
-memset(txbuf, 'a', sizeof(txbuf));
-
-//sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
-
-printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
-//memcpy(modem.tx.data.buf, "LoRa", 5);//copy data we'll sent to buffer
-
-modem.tx.data.size = strlen(modem.tx.data.buf) + 1;//Payload len
-modem.eth.preambleLen=6;
-modem.eth.bw = BW500;//Bandwidth 62.5KHz
-modem.eth.sf = SF8;//Spreading Factor 12
-modem.eth.ecr = CR8;//Error coding rate CR4/8
-modem.eth.CRC = 1;//Turn on CRC checking
-modem.eth.freq = 434800000;// 434.8MHz
-modem.eth.resetGpioN = 23;//GPIO4 on lora RESET pin
-modem.eth.dio0GpioN = 24;//GPIO17 on lora DIO0 pin to control Rxdone and Txdone interrupts
-modem.eth.outPower = OP20;//Output power
-modem.eth.powerOutPin = PA_BOOST;//Power Amplifire pin
-modem.eth.AGC = 1;//Auto Gain Control
-modem.eth.OCP = 240;// 45 to 240 mA. 0 to turn off protection
-modem.eth.implicitHeader = 0;//Explicit header mode
-modem.eth.syncWord = 0x12;
-//For detail information about SF, Error Coding Rate, Explicit header, Bandwidth, AGC, Over current protection and other features refer to sx127x datasheet https://www.semtech.com/uploads/documents/DS_SX1276-7-8-9_W_APP_V5.pdf
-
-LoRa_begin(&modem);
-while (1)
-{
-	memset(txbuf, 'a', sizeof(txbuf));
-	
-	//sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
-	
-	//printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
-
-	LoRa_send(&modem);
-
-	printf("Sending [%s] length=%d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
-
-	printf("Tsym: %f\n", modem.tx.data.Tsym);
-	printf("Tpkt: %f\n", modem.tx.data.Tpkt);
-	printf("payloadSymbNb: %u\n", modem.tx.data.payloadSymbNb);
-
-	printf("sleep %u ms to transmitt complete %u\n", (unsigned long)modem.tx.data.Tpkt, (unsigned)time(NULL));
-	usleep((unsigned long)(modem.tx.data.Tpkt * 1000));
-	//sleep(((int)modem.tx.data.Tpkt/1000)+1);
-	//sleep(3);
-}
-
-printf("end\n");
-
-LoRa_end(&modem);
-}
 #endif

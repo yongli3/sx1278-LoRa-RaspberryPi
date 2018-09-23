@@ -1,75 +1,75 @@
-#include "LoRa.h"
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <mosquitto.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <pthread.h>
+#include <sqlite3.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
 #include <sys/ioctl.h>
-#include <netinet/in.h>
-#include <net/if.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <termios.h>
-#include <errno.h>
-#include<pthread.h>
-#include <sys/time.h>
-#include <sqlite3.h>
-#include <mosquitto.h>
-#include <syslog.h>
+#include <sys/socket.h>
 #include <sys/sysinfo.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <syslog.h>
+#include <termios.h>
+#include <unistd.h>
+#include "LoRa.h"
 
-#define WWW_INTERNAL_SECONDS	120
+#define WWW_INTERNAL_SECONDS 120
 #define MQTT_HOST "202.120.26.119"
 #define MQTT_PORT 1883
 
-#define DB_NAME  "rawdata.db"
+#define DB_NAME "rawdata.db"
 
 #define TYPE_BOARDCAST 0x3a
 #define TYPE_REPORT 0x3b
-#define TYPE_ACK	0x3c
+#define TYPE_ACK 0x3c
 
-#define MOBILE_REPORT_EVENT_1  1
-#define MOBILE_REPORT_EVENT_2  2
-#define MOBILE_REPORT_EVENT_3  3
-#define MOBILE_REPORT_EVENT_4  4
+#define MOBILE_REPORT_EVENT_1 1
+#define MOBILE_REPORT_EVENT_2 2
+#define MOBILE_REPORT_EVENT_3 3
+#define MOBILE_REPORT_EVENT_4 4
 
-typedef struct  _AP_BROADCAST_EMPTYPACKAGE
-{ 
-	uint8_t startMark;		//起始符号
-  	uint16_t length;		//fix 0x0a
-  	uint16_t AP_Address;
-  	uint32_t time_Count;		//1970年1月1日0点到现在的秒数
-  	uint8_t LRC;		//类型
-  	uint8_t reserved;	//固定00
+typedef struct _AP_BROADCAST_EMPTYPACKAGE
+{
+    uint8_t startMark; //起始符号
+    uint16_t length;   // fix 0x0a
+    uint16_t AP_Address;
+    uint32_t time_Count; // 1970年1月1日0点到现在的秒数
+    uint8_t LRC;         //类型
+    uint8_t reserved;    //固定00
 } __attribute__((packed)) AP_BROADCAST_EMPTYPACKAGE;
 
 typedef struct _UM_REPORT_PACKAGE
 {
-	uint8_t package_StartMark;	//起始符号
-	uint16_t length;
-	uint16_t SendUnitAddress;
-	uint16_t SendUnit_SeqCounter;	//发出单元序号
-	uint8_t Event_Type;
-	uint32_t Event_timeStamp;
-	uint16_t TrainID;	//列车号
-	uint8_t TrainNumber1;  // 车次号 number1 << 16| number2 << 8 | number3
-	uint8_t TrainNumber2;
-	uint8_t TrainNumber3;
-	uint8_t UserName[9];//="user1234";
-	uint8_t UserIdNum[9];//="12345678";
-	uint16_t AP_ID; // station_id
-	uint8_t BatVoltage;
-	uint8_t reserved;
+    uint8_t package_StartMark; //起始符号
+    uint16_t length;
+    uint16_t SendUnitAddress;
+    uint16_t SendUnit_SeqCounter; //发出单元序号
+    uint8_t Event_Type;
+    uint32_t Event_timeStamp;
+    uint16_t TrainID;     //列车号
+    uint8_t TrainNumber1; // 车次号 number1 << 16| number2 << 8 | number3
+    uint8_t TrainNumber2;
+    uint8_t TrainNumber3;
+    uint8_t UserName[9];  //="user1234";
+    uint8_t UserIdNum[9]; //="12345678";
+    uint16_t AP_ID;       // station_id
+    uint8_t BatVoltage;
+    uint8_t reserved;
 } __attribute__((packed)) UM_REPORT_PACKAGE;
 
-typedef struct  _AP_ACK_PACKAGE
-{ 
-	uint8_t ACKstartMark;		//起始符号
-  	uint16_t length;		//fix 0x0a	
-  	uint16_t  AP_Address;		//发出单元号
-  	uint16_t SendUnitAddress; 
-	uint16_t SendUnit_SeqCounter;
-  	uint16_t crc;			
+typedef struct _AP_ACK_PACKAGE
+{
+    uint8_t ACKstartMark; //起始符号
+    uint16_t length;      // fix 0x0a
+    uint16_t AP_Address;  //发出单元号
+    uint16_t SendUnitAddress;
+    uint16_t SendUnit_SeqCounter;
+    uint16_t crc;
 } __attribute__((packed)) AP_ACK_PACKAGE;
 
 static char txbuf[LORA_TX_LEN];
@@ -82,122 +82,144 @@ static AP_ACK_PACKAGE ack_packet;
 static bool lora_tx_done = false;
 static bool lora_rx_done = false;
 static bool connected = true;
-static sqlite3 *db = NULL;
+static sqlite3* db = NULL;
 
-static void rx_f(rxData *rx){
+static void rx_f(rxData* rx)
+{
 
-	int i = 0;
+    int i = 0;
 
-	if (rx->CRC) {
-		// crc error, discard
-		rx->size = 0;
-		printf(">>RXCRCERR\n");
-	} else {
-		printf(">>RXdone %llu CRC=%d size=%d RSSI=%d SNR=%f\n", 
-			current_timestamp(), rx->CRC, rx->size, rx->RSSI, rx->SNR);
-	}
+    if (rx->CRC)
+    {
+        // crc error, discard
+        rx->size = 0;
+        printf(">>RXCRCERR\n");
+    }
+    else
+    {
+        printf(">>RXdone %llu CRC=%d size=%d RSSI=%d SNR=%f\n",
+               current_timestamp(), rx->CRC, rx->size, rx->RSSI, rx->SNR);
+    }
 #if 0
 	for (i = 0; i < rx->size; i++) {
 	    printf("%x\n", rx->buf[i]);
 	}
 	printf("%s\n", rx->buf);
 #endif
-	lora_rx_done = true;
+    lora_rx_done = true;
 }
 
-static void tx_f(txData *tx){
-    //printf("<<TXdone %llu\n", current_timestamp());
-	lora_tx_done = true;
+static void tx_f(txData* tx)
+{
+    // printf("<<TXdone %llu\n", current_timestamp());
+    lora_tx_done = true;
 }
 
-static void connect_callback(struct mosquitto *mosq, void *obj, int result)
+static void connect_callback(struct mosquitto* mosq, void* obj, int result)
 {
     syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
 }
 
-static void mqttqos_connect_callback(struct mosquitto *mosq, void *obj, int result)
+static void mqttqos_connect_callback(struct mosquitto* mosq, void* obj,
+                                     int result)
 {
     syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-	
-} 
-
-static void mqttqos_disconnect_callback(struct mosquitto *mosq, void *obj, int result)
-{
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-	//connected = false;
 }
 
-static void mqttqos_message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message)
+static void mqttqos_disconnect_callback(struct mosquitto* mosq, void* obj,
+                                        int result)
+{
+    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
+    // connected = false;
+}
+
+static void mqttqos_message_callback(struct mosquitto* mosq, void* obj,
+                                     const struct mosquitto_message* message)
 {
     bool match = 0;
-    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n", message->payloadlen, (char*) message->payload, message->topic);
+    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n",
+           message->payloadlen, (char*)message->payload, message->topic);
 
-    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic, &match);
-    if (match) {
+    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic,
+                                &match);
+    if (match)
+    {
         syslog(LOG_NOTICE, "got message for ADC topic\n");
     }
 }
 
-static void mqttqos_publish_callback(struct mosquitto *mosq, void *obj, int result)
+static void mqttqos_publish_callback(struct mosquitto* mosq, void* obj,
+                                     int result)
 {
     syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-	mosquitto_disconnect((struct mosquitto *)obj);
+    mosquitto_disconnect((struct mosquitto*)obj);
 }
 
-static void message_callback(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message)
+static void message_callback(struct mosquitto* mosq, void* obj,
+                             const struct mosquitto_message* message)
 {
     bool match = 0;
-    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n", message->payloadlen, (char*) message->payload, message->topic);
+    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n",
+           message->payloadlen, (char*)message->payload, message->topic);
 
-    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic, &match);
-    if (match) {
+    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic,
+                                &match);
+    if (match)
+    {
         syslog(LOG_NOTICE, "got message for ADC topic\n");
     }
 }
 
-static void mosq_log_callback(struct mosquitto *mosq, void *userdata, int level, const char *str)
+static void mosq_log_callback(struct mosquitto* mosq, void* userdata, int level,
+                              const char* str)
 {
     /* Pring all log messages regardless of level. */
-  
-  switch(level){
-    case MOSQ_LOG_DEBUG:
-    case MOSQ_LOG_INFO:
-    case MOSQ_LOG_NOTICE:
-    case MOSQ_LOG_WARNING:
-    case MOSQ_LOG_ERR: {
-      syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
+
+    switch (level)
+    {
+        case MOSQ_LOG_DEBUG:
+        case MOSQ_LOG_INFO:
+        case MOSQ_LOG_NOTICE:
+        case MOSQ_LOG_WARNING:
+        case MOSQ_LOG_ERR:
+        {
+            syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
+        }
     }
-  }
 }
 
-static void mqttqos_log_callback(struct mosquitto *mosq, void *userdata, int level, const char *str)
+static void mqttqos_log_callback(struct mosquitto* mosq, void* userdata,
+                                 int level, const char* str)
 {
     /* Pring all log messages regardless of level. */
-  
-  switch(level){
-    case MOSQ_LOG_DEBUG:
-    case MOSQ_LOG_INFO:
-    case MOSQ_LOG_NOTICE:
-    case MOSQ_LOG_WARNING:
-    case MOSQ_LOG_ERR: {
-      //syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
+
+    switch (level)
+    {
+        case MOSQ_LOG_DEBUG:
+        case MOSQ_LOG_INFO:
+        case MOSQ_LOG_NOTICE:
+        case MOSQ_LOG_WARNING:
+        case MOSQ_LOG_ERR:
+        {
+            // syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
+        }
     }
-  }
 }
 
-static int mqtt_publish_message(char *topic, char *message)
+static int mqtt_publish_message(char* topic, char* message)
 {
     char msg[256];
     char clientid[255];
-    struct mosquitto *mosq = NULL;
+    struct mosquitto* mosq = NULL;
     int ret = 0;
-	char command[255];
-	char hostname[64];
-	bool clean_session = true;
+    char command[255];
+    char hostname[64];
+    bool clean_session = true;
 
-    syslog(LOG_NOTICE, "+%s topic=[%s] message=[%s]\n", __func__, topic, message);
+    syslog(LOG_NOTICE, "+%s topic=[%s] message=[%s]\n", __func__, topic,
+           message);
 
-	gethostname(hostname, sizeof(hostname));
+    gethostname(hostname, sizeof(hostname));
 
     mosquitto_lib_init();
 
@@ -206,18 +228,20 @@ static int mqtt_publish_message(char *topic, char *message)
 
     mosq = mosquitto_new(clientid, clean_session, 0);
 
-    if (mosq) {
+    if (mosq)
+    {
         mosquitto_log_callback_set(mosq, mqttqos_log_callback);
         mosquitto_connect_callback_set(mosq, mqttqos_connect_callback);
-	    mosquitto_disconnect_callback_set(mosq, mqttqos_disconnect_callback);
+        mosquitto_disconnect_callback_set(mosq, mqttqos_disconnect_callback);
         mosquitto_message_callback_set(mosq, mqttqos_message_callback);
-    	mosquitto_publish_callback_set(mosq, mqttqos_publish_callback);
-	
+        mosquitto_publish_callback_set(mosq, mqttqos_publish_callback);
+
         ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
 
-        if (ret) {
+        if (ret)
+        {
             syslog(LOG_ERR, "MQTT %s connect error!\n", MQTT_HOST);
-			return -1;
+            return -1;
         }
 
 #if 0
@@ -228,47 +252,51 @@ static int mqtt_publish_message(char *topic, char *message)
 		} while (ret == MOSQ_ERR_SUCCESS && connected);
 #endif
 
-		ret = mosquitto_loop_start(mosq);
-		if (ret != MOSQ_ERR_SUCCESS) {
-			syslog(LOG_ERR, "LOOP fail!\n");
-			return -1;		
-		}
+        ret = mosquitto_loop_start(mosq);
+        if (ret != MOSQ_ERR_SUCCESS)
+        {
+            syslog(LOG_ERR, "LOOP fail!\n");
+            return -1;
+        }
 
-		syslog(LOG_NOTICE, "publish message=[%s] len=%d size=%d\n", message, strlen(message), sizeof(message));
+        syslog(LOG_NOTICE, "publish message=[%s] len=%d size=%d\n", message,
+               strlen(message), sizeof(message));
         mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
 
-		mosquitto_loop_stop(mosq, false);
-        
-    	mosquitto_destroy(mosq);
-    } else {
+        mosquitto_loop_stop(mosq, false);
+
+        mosquitto_destroy(mosq);
+    }
+    else
+    {
         syslog(LOG_ERR, "mosq new fail!\n");
     }
 
     mosquitto_lib_cleanup();
 
-	syslog(LOG_NOTICE, "-%s\n", __func__);
+    syslog(LOG_NOTICE, "-%s\n", __func__);
 
     return 0;
 }
 
-static int mqtt_test(char *topic, char *message)
+static int mqtt_test(char* topic, char* message)
 {
     char msg[256];
     char clientid[24];
-    struct mosquitto *mosq = NULL;
+    struct mosquitto* mosq = NULL;
     int ret = 0;
-	char command[255];
+    char command[255];
 
     syslog(LOG_NOTICE, "+%s %s-%s\n", __func__, topic, message);
 
-	// for double safe use system command to send
+    // for double safe use system command to send
 
-	sprintf(command, "mosquitto_pub -t \"%s\" -m \"%s;\" -h %s", topic, message, MQTT_HOST);
+    sprintf(command, "mosquitto_pub -t \"%s\" -m \"%s;\" -h %s", topic, message,
+            MQTT_HOST);
 
+    ret = system(command);
+    syslog(LOG_NOTICE, "exec [%s] return %d\n", command, ret);
 
-	ret = system(command);
-	syslog(LOG_NOTICE, "exec [%s] return %d\n", command, ret);
-    
     mosquitto_lib_init();
 
     memset(clientid, 0, sizeof(clientid));
@@ -276,31 +304,36 @@ static int mqtt_test(char *topic, char *message)
 
     mosq = mosquitto_new(clientid, true, 0);
 
-    if (mosq) {
+    if (mosq)
+    {
         mosquitto_log_callback_set(mosq, mosq_log_callback);
         mosquitto_connect_callback_set(mosq, connect_callback);
         mosquitto_message_callback_set(mosq, message_callback);
-    
+
         ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
 
-        if (ret) {
+        if (ret)
+        {
             syslog(LOG_ERR, "MQTT %s connect error!\n", MQTT_HOST);
-			return -1;
+            return -1;
         }
 
         ret = mosquitto_loop_start(mosq);
-        if (ret != MOSQ_ERR_SUCCESS) {
+        if (ret != MOSQ_ERR_SUCCESS)
+        {
             syslog(LOG_ERR, "LOOP fail!\n");
         }
 
-        //while (1) 
-        {        
-            //sprintf(message, "%s-%d\n", message, current_timestamp());
-            syslog(LOG_NOTICE, "message=[%s] len=%d size=%d\n", message, strlen(message), sizeof(message));
-            //mosquitto_subscribe(mosq, NULL, "/devices/wb-adc/controls/+", 0);
-            mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
-            //break;
-            //usleep(1000*1000);
+        // while (1)
+        {
+            // sprintf(message, "%s-%d\n", message, current_timestamp());
+            syslog(LOG_NOTICE, "message=[%s] len=%d size=%d\n", message,
+                   strlen(message), sizeof(message));
+            // mosquitto_subscribe(mosq, NULL, "/devices/wb-adc/controls/+", 0);
+            mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0,
+                              0);
+            // break;
+            // usleep(1000*1000);
         }
 #if 0
         while (true) {
@@ -311,226 +344,233 @@ static int mqtt_test(char *topic, char *message)
                 mosquitto_reconnect(mosq);
             }
         }
-#endif    
-    mosquitto_destroy(mosq);
-    } else {
+#endif
+        mosquitto_destroy(mosq);
+    }
+    else
+    {
         syslog(LOG_ERR, "mosq new fail!\n");
     }
 
     mosquitto_lib_cleanup();
 
-	syslog(LOG_NOTICE, "publish message [%s] okay!\n", message);
+    syslog(LOG_NOTICE, "publish message [%s] okay!\n", message);
 
     return 0;
 }
 
-static int callbackInsert(void *NotUsed, int argc, char **argv, char **colName) {
+static int callbackInsert(void* NotUsed, int argc, char** argv, char** colName)
+{
     syslog(LOG_NOTICE, "+%s\n", __func__);
     return 0;
 }
 
-static int callbackSelect(void *NotUsed, int argc, char **argv, char **colName) {
+static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
+{
     char sqlString[256];
-     char *errMsg = NULL;
-     int ret = -1;
+    char* errMsg = NULL;
+    int ret = -1;
     int i;
-    //argc= column number argv=column value
+    // argc= column number argv=column value
     syslog(LOG_NOTICE, "+%s argc=%d ID=%s\n", __func__, argc, argv[0]);
 
     // send this record to MQTT server, and set local = 0
 
-
-    sqlite3_mutex_enter(sqlite3_db_mutex(db));    
+    sqlite3_mutex_enter(sqlite3_db_mutex(db));
     sprintf(sqlString, "UPDATE raw set %s = 0;", colName[3]);
-        ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
-        if( ret != SQLITE_OK)
-                {
-                    syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
-                    return -1;
-                } 
-                else
-                {
-                    syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
-                }
+    ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
+    if (ret != SQLITE_OK)
+    {
+        syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
+               sqlite3_errmsg(db));
+        return -1;
+    }
+    else
+    {
+        syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
+    }
 
-    
     sqlite3_mutex_leave(sqlite3_db_mutex(db));
 
 #if 0
     for (i = 0; i < argc; i++) {
         printf("%d:%s-%s\n", i, argv[i], colName[i]);
     }
-#endif    
-    //argv[0]; colName[0]
-    //UPDATE tblStuff SET name = 'Temperature10' WHERE name = 'Temperature1'
+#endif
+    // argv[0]; colName[0]
+    // UPDATE tblStuff SET name = 'Temperature10' WHERE name = 'Temperature1'
 
     return 0;
 }
 
-void *threadFun1(void *ptr)
+void* threadFun1(void* ptr)
 {
     char sqlString[256];
-    char *errMsg = NULL;
+    char* errMsg = NULL;
     int ret = -1;
 
-    int type = (int) ptr;
-    fprintf(stderr,"Thread1 - %d\n",type);
+    int type = (int)ptr;
+    fprintf(stderr, "Thread1 - %d\n", type);
 
-while (1) {
-    sqlite3_mutex_enter(sqlite3_db_mutex(db));
-    // Perform some queries on the database
-    sprintf(sqlString, "INSERT INTO raw(time, message, local) VALUES ('%llu','%s', 1);",
-                                                            current_timestamp(), "lora");
+    while (1)
+    {
+        sqlite3_mutex_enter(sqlite3_db_mutex(db));
+        // Perform some queries on the database
+        sprintf(
+            sqlString,
+            "INSERT INTO raw(time, message, local) VALUES ('%llu','%s', 1);",
+            current_timestamp(), "lora");
         ret = sqlite3_exec(db, sqlString, callbackInsert, NULL, &errMsg);
-        if( ret != SQLITE_OK)
-                {
-                    syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
-                } 
-                else
-                {
-                    syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
-                }
+        if (ret != SQLITE_OK)
+        {
+            syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
+                   sqlite3_errmsg(db));
+        }
+        else
+        {
+            syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
+        }
 
-    
-    sqlite3_mutex_leave(sqlite3_db_mutex(db));
-    usleep(1000000);
-}   
-    return  ptr;
+        sqlite3_mutex_leave(sqlite3_db_mutex(db));
+        usleep(1000000);
+    }
+    return ptr;
 }
 
-void *threadFun2(void *ptr)
+void* threadFun2(void* ptr)
 {
     char sqlString[256];
-     int ret = -1;
-     char *errMsg = NULL;
-    int type = (int) ptr;
-    fprintf(stderr,"Thread2 - %d\n",type);
+    int ret = -1;
+    char* errMsg = NULL;
+    int type = (int)ptr;
+    fprintf(stderr, "Thread2 - %d\n", type);
 
-while (1) {
-    sqlite3_mutex_enter(sqlite3_db_mutex(db));
-    // Perform some queries on the database
-    // query all local=1; send out and set local=0
-    sprintf(sqlString, "SELECT * from raw where local=1;");
+    while (1)
+    {
+        sqlite3_mutex_enter(sqlite3_db_mutex(db));
+        // Perform some queries on the database
+        // query all local=1; send out and set local=0
+        sprintf(sqlString, "SELECT * from raw where local=1;");
         ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
-        if( ret != SQLITE_OK)
-                {
-                    syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString, sqlite3_errmsg(db));
-                } 
-                else
-                {
-                    syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
-                }
-
-    
-    sqlite3_mutex_leave(sqlite3_db_mutex(db));
-    usleep(1000);
-}    
-    return  ptr;
-}
-
-static int set_interface_attribs (int fd, int speed, int parity)
-{
-        struct termios tty;
-        memset (&tty, 0, sizeof tty);
-        if (tcgetattr (fd, &tty) != 0)
+        if (ret != SQLITE_OK)
         {
-                printf("error %d from tcgetattr", errno);
-                return -1;
+            syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
+                   sqlite3_errmsg(db));
+        }
+        else
+        {
+            syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
         }
 
-        cfsetospeed (&tty, speed);
-        cfsetispeed (&tty, speed);
-
-        tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8;     // 8-bit chars
-        // disable IGNBRK for mismatched speed tests; otherwise receive break
-        // as \000 chars
-        tty.c_iflag &= ~IGNBRK;         // disable break processing
-        tty.c_lflag = 0;                // no signaling chars, no echo,
-                                        // no canonical processing
-        tty.c_oflag = 0;                // no remapping, no delays
-        tty.c_cc[VMIN]  = 0;            // read doesn't block
-        tty.c_cc[VTIME] = 5;            // 0.5 seconds read timeout
-
-        tty.c_iflag &= ~(IXON | IXOFF | IXANY); // shut off xon/xoff ctrl
-
-        tty.c_cflag |= (CLOCAL | CREAD);// ignore modem controls,
-                                        // enable reading
-        tty.c_cflag &= ~(PARENB | PARODD);      // shut off parity
-        tty.c_cflag |= parity;
-        tty.c_cflag &= ~CSTOPB;
-        tty.c_cflag &= ~CRTSCTS;
-
-        if (tcsetattr (fd, TCSANOW, &tty) != 0)
-        {
-                printf ("error %d from tcsetattr", errno);
-                return -1;
-        }
-        return 0;
+        sqlite3_mutex_leave(sqlite3_db_mutex(db));
+        usleep(1000);
+    }
+    return ptr;
 }
 
-static void set_blocking (int fd, int should_block)
+static int set_interface_attribs(int fd, int speed, int parity)
 {
-        struct termios tty;
-        memset (&tty, 0, sizeof tty);
-        if (tcgetattr (fd, &tty) != 0)
-        {
-                printf ("error %d from tggetattr", errno);
-                return;
-        }
+    struct termios tty;
+    memset(&tty, 0, sizeof tty);
+    if (tcgetattr(fd, &tty) != 0)
+    {
+        printf("error %d from tcgetattr", errno);
+        return -1;
+    }
 
-        tty.c_cc[VMIN]  = should_block ? 1 : 0;
-        tty.c_cc[VTIME] = 10;            // 0.5 seconds read timeout
+    cfsetospeed(&tty, speed);
+    cfsetispeed(&tty, speed);
 
-        if (tcsetattr (fd, TCSANOW, &tty) != 0)
-                printf ("error %d setting term attributes", errno);
+    tty.c_cflag = (tty.c_cflag & ~CSIZE) | CS8; // 8-bit chars
+    // disable IGNBRK for mismatched speed tests; otherwise receive break
+    // as \000 chars
+    tty.c_iflag &= ~IGNBRK; // disable break processing
+    tty.c_lflag = 0;        // no signaling chars, no echo,
+                            // no canonical processing
+    tty.c_oflag = 0;        // no remapping, no delays
+    tty.c_cc[VMIN] = 0;     // read doesn't block
+    tty.c_cc[VTIME] = 5;    // 0.5 seconds read timeout
+
+    tty.c_iflag &= ~(IXON | IXOFF | IXANY); // shut off xon/xoff ctrl
+
+    tty.c_cflag |= (CLOCAL | CREAD);   // ignore modem controls,
+                                       // enable reading
+    tty.c_cflag &= ~(PARENB | PARODD); // shut off parity
+    tty.c_cflag |= parity;
+    tty.c_cflag &= ~CSTOPB;
+    tty.c_cflag &= ~CRTSCTS;
+
+    if (tcsetattr(fd, TCSANOW, &tty) != 0)
+    {
+        printf("error %d from tcsetattr", errno);
+        return -1;
+    }
+    return 0;
 }
 
-static int get_ipaddress(char *ipaddress, int size)
+static void set_blocking(int fd, int should_block)
+{
+    struct termios tty;
+    memset(&tty, 0, sizeof tty);
+    if (tcgetattr(fd, &tty) != 0)
+    {
+        printf("error %d from tggetattr", errno);
+        return;
+    }
+
+    tty.c_cc[VMIN] = should_block ? 1 : 0;
+    tty.c_cc[VTIME] = 10; // 0.5 seconds read timeout
+
+    if (tcsetattr(fd, TCSANOW, &tty) != 0)
+        printf("error %d setting term attributes", errno);
+}
+
+static int get_ipaddress(char* ipaddress, int size)
 {
 
-	int fd = 1;
-	 struct ifreq ifr;
-	  
-	 char iface[] = "eth1";
-	  
-	 fd = socket(AF_INET, SOCK_DGRAM, 0);
-	
-	 //Type of address to retrieve - IPv4 IP address
-	 ifr.ifr_addr.sa_family = AF_INET;
-	
-	 //Copy the interface name in the ifreq structure
-	 strncpy(ifr.ifr_name , iface , IFNAMSIZ-1);
-	
-	 ioctl(fd, SIOCGIFADDR, &ifr);
-	
-	 close(fd);
-	
-	 //display result
-	 strcpy(ipaddress, inet_ntoa(( (struct sockaddr_in *)&ifr.ifr_addr )->sin_addr));
-	 printf("%s - %s\n" , iface , ipaddress);
+    int fd = 1;
+    struct ifreq ifr;
 
-	return 0;
+    char iface[] = "eth1";
 
+    fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    // Type of address to retrieve - IPv4 IP address
+    ifr.ifr_addr.sa_family = AF_INET;
+
+    // Copy the interface name in the ifreq structure
+    strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
+
+    ioctl(fd, SIOCGIFADDR, &ifr);
+
+    close(fd);
+
+    // display result
+    strcpy(ipaddress,
+           inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr));
+    printf("%s - %s\n", iface, ipaddress);
+
+    return 0;
 }
 
 int time_test()
 {
-  time_t rawtime;
-  struct tm * timeinfo;
+    time_t rawtime;
+    struct tm* timeinfo;
 
-  time(&rawtime);
+    time(&rawtime);
 
-   printf("%s\n", ctime(&rawtime));
-  
-  timeinfo = localtime(&rawtime);
+    printf("%s\n", ctime(&rawtime));
 
-  printf("%04d-%02d-%02d %02d:%02d:%02d\n", 
-  	timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
-  	timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-  
-  printf ("Current local time and date: %s", asctime(timeinfo));
+    timeinfo = localtime(&rawtime);
 
-  return 0;
+    printf("%04d-%02d-%02d %02d:%02d:%02d\n", timeinfo->tm_year + 1900,
+           timeinfo->tm_mon + 1, timeinfo->tm_mday, timeinfo->tm_hour,
+           timeinfo->tm_min, timeinfo->tm_sec);
+
+    printf("Current local time and date: %s", asctime(timeinfo));
+
+    return 0;
 }
 
 static int www_connect()
@@ -542,184 +582,198 @@ static int www_connect()
     char write_buffer[256];
     char read_buffer[256];
     char mqtt_message[256];
-	char mqtt_topic[256];
-	char hostname[255];
-	char ipaddress[255];
-    char *portname = "/dev/ttyUSB0";
+    char mqtt_topic[256];
+    char hostname[255];
+    char ipaddress[255];
+    char* portname = "/dev/ttyUSB0";
 
-	time_t rawtime;
-  	struct tm * timeinfo;
-	struct sysinfo info;
+    time_t rawtime;
+    struct tm* timeinfo;
+    struct sysinfo info;
 
-
-	
-	
     int fd = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
     if (fd < 0)
     {
-   		syslog(LOG_ERR, "error %d opening %s: %s", errno, portname, strerror (errno));
-		system("reboot");
+        syslog(LOG_ERR, "error %d opening %s: %s", errno, portname,
+               strerror(errno));
+        system("reboot");
         return -1;
     }
-    
-    set_interface_attribs(fd, B115200, 0);  // set speed to 115,200 bps, 8n1 (no parity)
-    set_blocking(fd, 0);                // set no blocking
-    
+
+    set_interface_attribs(fd, B115200,
+                          0); // set speed to 115,200 bps, 8n1 (no parity)
+    set_blocking(fd, 0);      // set no blocking
+
     while (0)
     {
-    write (fd, "ATE0\r\n", 7);           // send 7 character greeting
-    
-    //sleep(1);
-    usleep ((7 + 25) * 1000);             // sleep enough to transmit the 7 plus
-                                         // receive 25:  approx 100 uS per char transmit
-    char buf [100];
-    
-    memset(buf, 0, sizeof(buf));
-    
-    int n = read(fd, buf, sizeof(buf));  // read up to 100 characters if ready to read
-    
-    printf("read %d buf=%s\n", n, buf);
-    sleep(1);
+        write(fd, "ATE0\r\n", 7); // send 7 character greeting
+
+        // sleep(1);
+        usleep((7 + 25) * 1000); // sleep enough to transmit the 7 plus
+                                 // receive 25:  approx 100 uS per char transmit
+        char buf[100];
+
+        memset(buf, 0, sizeof(buf));
+
+        int n = read(fd, buf,
+                     sizeof(buf)); // read up to 100 characters if ready to read
+
+        printf("read %d buf=%s\n", n, buf);
+        sleep(1);
     }
 
-    while (1) {
+    while (1)
+    {
+        memset(write_buffer, 0, sizeof(write_buffer));
+        sprintf(write_buffer, "%s", "ATE0\r\n");
+        size = write(fd, write_buffer, strlen(write_buffer));
+        tcflush(fd, TCIOFLUSH);
+        printf("write %s %d\n", write_buffer, size);
+        // usleep (size * 1000);
+        sleep(1);
+        memset(read_buffer, 0, sizeof(read_buffer));
+        size = read(fd, read_buffer, sizeof(read_buffer));
+        printf("read %d [%s]\n", size, read_buffer);
+
+        // for (i = 0; i < size; i++)
+        // printf("%x\n", read_buffer[i]);
+
+        if (strstr(read_buffer, "OK"))
+        {
+            printf("Modem OK\n");
+            break;
+        }
+        else
+        {
+            if (repeat_count > 5)
+            {
+                syslog(LOG_ERR, "MODEM ATE0 fail!\n");
+                goto cleanup;
+            }
+        };
+        repeat_count++;
+        sleep(1);
+    }
+
     memset(write_buffer, 0, sizeof(write_buffer));
-    sprintf(write_buffer, "%s", "ATE0\r\n");
-    size = write(fd,write_buffer,strlen(write_buffer));
-    tcflush(fd, TCIOFLUSH);
+    sprintf(write_buffer, "%s", "AT+CFUN=0\r\n");
+    size = write(fd, write_buffer, strlen(write_buffer));
+    tcflush(fd, TCOFLUSH);
     printf("write %s %d\n", write_buffer, size);
-    //usleep (size * 1000);
-    sleep(1);
+    sleep(4);
     memset(read_buffer, 0, sizeof(read_buffer));
     size = read(fd, read_buffer, sizeof(read_buffer));
     printf("read %d [%s]\n", size, read_buffer);
-
-    //for (i = 0; i < size; i++)
-       //printf("%x\n", read_buffer[i]);
-
-    if (strstr(read_buffer, "OK")) {
-        printf("Modem OK\n");
-        break;
-    } else {
-        if (repeat_count > 5) {
-            syslog(LOG_ERR, "MODEM ATE0 fail!\n");
-            goto cleanup;
-        }
+    if (NULL == strstr(read_buffer, "OK"))
+    {
+        syslog(LOG_ERR, "command %s error !\n", write_buffer);
+        goto cleanup;
     };
-    repeat_count++;
-    sleep(1);
-}
 
-memset(write_buffer, 0, sizeof(write_buffer));
-sprintf(write_buffer, "%s", "AT+CFUN=0\r\n");
-size = write(fd,write_buffer,strlen(write_buffer));
-tcflush(fd, TCOFLUSH);
-printf("write %s %d\n", write_buffer, size);
-sleep(4);
-memset(read_buffer, 0, sizeof(read_buffer));
-size = read(fd, read_buffer, sizeof(read_buffer));
-printf("read %d [%s]\n", size, read_buffer);    
-if (NULL == strstr(read_buffer, "OK")) {
-    syslog(LOG_ERR, "command %s error !\n", write_buffer);
-    goto cleanup;
-};
-
-memset(write_buffer, 0, sizeof(write_buffer));
-sprintf(write_buffer, "%s", "AT+CFUN=1\r\n");
-size = write(fd,write_buffer,strlen(write_buffer));
-tcflush(fd, TCOFLUSH);
-printf("write %s %d\n", write_buffer, size);
-sleep(7);
-memset(read_buffer, 0, sizeof(read_buffer));
-size = read(fd, read_buffer, sizeof(read_buffer));
-printf("read %d [%s]\n", size, read_buffer);    
-if (NULL == strstr(read_buffer, "OK")) {
-    syslog(LOG_ERR, "command %s error !\n", write_buffer);
-    goto cleanup;
-};
+    memset(write_buffer, 0, sizeof(write_buffer));
+    sprintf(write_buffer, "%s", "AT+CFUN=1\r\n");
+    size = write(fd, write_buffer, strlen(write_buffer));
+    tcflush(fd, TCOFLUSH);
+    printf("write %s %d\n", write_buffer, size);
+    sleep(7);
+    memset(read_buffer, 0, sizeof(read_buffer));
+    size = read(fd, read_buffer, sizeof(read_buffer));
+    printf("read %d [%s]\n", size, read_buffer);
+    if (NULL == strstr(read_buffer, "OK"))
+    {
+        syslog(LOG_ERR, "command %s error !\n", write_buffer);
+        goto cleanup;
+    };
 
     memset(write_buffer, 0, sizeof(write_buffer));
     sprintf(write_buffer, "%s", "AT+CGACT=1,1\r\n");
     tcflush(fd, TCOFLUSH);
-    size = write(fd,write_buffer,strlen(write_buffer));
+    size = write(fd, write_buffer, strlen(write_buffer));
     printf("write %s %d\n", write_buffer, size);
     sleep(7);
     memset(read_buffer, 0, sizeof(read_buffer));
     size = read(fd, read_buffer, sizeof(read_buffer));
-    printf("read %d [%s]\n", size, read_buffer);    
-    if (NULL == strstr(read_buffer, "OK")) {
+    printf("read %d [%s]\n", size, read_buffer);
+    if (NULL == strstr(read_buffer, "OK"))
+    {
         syslog(LOG_ERR, "command %s error !\n", write_buffer);
         goto cleanup;
     };
 
-    // +ZGIPDNS: 1,1,"IP","10.101.206.237","0.0.0.0","116.116.116.116","221.5.88.88"
-    //strcpy(mqtt_message, read_buffer);
+    // +ZGIPDNS:
+    // 1,1,"IP","10.101.206.237","0.0.0.0","116.116.116.116","221.5.88.88"
+    // strcpy(mqtt_message, read_buffer);
 
     memset(write_buffer, 0, sizeof(write_buffer));
     sprintf(write_buffer, "%s", "AT+ZGACT=1,1\r\n");
-    size = write(fd,write_buffer,strlen(write_buffer));
+    size = write(fd, write_buffer, strlen(write_buffer));
     tcflush(fd, TCOFLUSH);
     printf("write %s %d\n", write_buffer, size);
     sleep(7);
     memset(read_buffer, 0, sizeof(read_buffer));
     size = read(fd, read_buffer, sizeof(read_buffer));
-    printf("read %d [%s]\n", size, read_buffer);    
+    printf("read %d [%s]\n", size, read_buffer);
 
-
-    if (NULL == strstr(read_buffer, "OK")) {
+    if (NULL == strstr(read_buffer, "OK"))
+    {
         syslog(LOG_ERR, "command %s error !\n", write_buffer);
         goto cleanup;
     }
 
-    //ret = system("ifconfig eth0 down");
-    //printf("system return %d\n", ret);
-    
+    // ret = system("ifconfig eth0 down");
+    // printf("system return %d\n", ret);
+
     ret = system("udhcpc -i eth1");
     printf("system return %d\n", ret);
 
-	sleep(3);
-	gethostname(hostname, sizeof(hostname));
+    sleep(3);
+    gethostname(hostname, sizeof(hostname));
 
-	printf("hostname=%s\n", hostname);
+    printf("hostname=%s\n", hostname);
 
-	//sprintf(hostname, "%s-network", hostname);
+    // sprintf(hostname, "%s-network", hostname);
 
-	system("systemctl restart systemd-timesyncd.service");
-	
-	while (1) {
-		// send to systemd
-		printf("Checking network ...\n");
-		// check if internet is okay
-		
-		ret = system("ping 114.114.114.114 -c 1");
-		if (ret) {
-			syslog(LOG_ERR, "network error!\n");
-			break;
-		}
+    system("systemctl restart systemd-timesyncd.service");
 
-		get_ipaddress(ipaddress, sizeof(ipaddress));
-		sysinfo(&info);
-		snprintf(mqtt_message, sizeof(mqtt_message), "IP=%s;UP=%lu", ipaddress, info.uptime);
-		//syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message, hostname);
+    while (1)
+    {
+        // send to systemd
+        printf("Checking network ...\n");
+        // check if internet is okay
 
-		time (&rawtime);
-		timeinfo = localtime(&rawtime);
+        ret = system("ping 114.114.114.114 -c 1");
+        if (ret)
+        {
+            syslog(LOG_ERR, "network error!\n");
+            break;
+        }
 
-		snprintf(mqtt_topic, sizeof(mqtt_topic), "%s-%04d-%02d-%02d %02d:%02d:%02d", hostname,
-		  timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
-		  timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+        get_ipaddress(ipaddress, sizeof(ipaddress));
+        sysinfo(&info);
+        snprintf(mqtt_message, sizeof(mqtt_message), "IP=%s;UP=%lu", ipaddress,
+                 info.uptime);
+        // syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message,
+        // hostname);
 
-		ret = mqtt_publish_message(mqtt_topic, mqtt_message);
-		if (ret) {
-			syslog(LOG_ERR, "MQTT error!\n");
-			break;
-		}
-		sleep(WWW_INTERNAL_SECONDS);
-	}    
-cleanup:    
+        time(&rawtime);
+        timeinfo = localtime(&rawtime);
+
+        snprintf(mqtt_topic, sizeof(mqtt_topic),
+                 "%s-%04d-%02d-%02d %02d:%02d:%02d", hostname,
+                 timeinfo->tm_year + 1900, timeinfo->tm_mon + 1,
+                 timeinfo->tm_mday, timeinfo->tm_hour, timeinfo->tm_min,
+                 timeinfo->tm_sec);
+
+        ret = mqtt_publish_message(mqtt_topic, mqtt_message);
+        if (ret)
+        {
+            syslog(LOG_ERR, "MQTT error!\n");
+            break;
+        }
+        sleep(WWW_INTERNAL_SECONDS);
+    }
+cleanup:
     close(fd);
-
-
 
     return 0;
 }
@@ -963,287 +1017,339 @@ int main() {
     return 0;
 }
 #else
-int main(){
-	char mqtt_message[512];
-	char mqtt_topic[256];
-	//unsigned char send_len = 0;
-	unsigned int send_seq = 0;
-	int i = 0;
-	int ret = 0;
-	char hostname[64];
-	char current_date[64];
-	time_t rawtime;
-	struct tm * timeinfo;
-	LoRa_ctl modem;
-
-	gethostname(hostname, sizeof(hostname));
-	srand((unsigned)time(NULL));
-
-	//printf("%d-%s\n", strtol(hostname, NULL, 10), hostname);
-
-	//printf("%d-%d-%d-%d\n", sizeof(uint8_t), sizeof(uint16_t), sizeof(uint32_t), sizeof(unsigned long));
-	//return 0;
-
-	printf("clear %d-%d\n", sizeof(boardcast_packet), sizeof(report_packet));
-	memset(&boardcast_packet, 0, sizeof(boardcast_packet));
-	memset(&report_packet, 0, sizeof(report_packet));
-
-	boardcast_packet.AP_Address = strtol(hostname, NULL, 10);
-	boardcast_packet.LRC = 0;
-	boardcast_packet.startMark = TYPE_BOARDCAST;
-	boardcast_packet.time_Count = time(NULL);
-	boardcast_packet.length = sizeof(boardcast_packet) - 1;
-	boardcast_packet.reserved = 0;
-
-	gethostname(hostname, sizeof(hostname));
-
-//See for typedefs, enumerations and there values in LoRa.h header file
-modem.spiCS = 0;//Raspberry SPI CE pin number
-modem.tx.callback = tx_f;
-modem.tx.data.buf = (char *)&boardcast_packet;
-
-modem.rx.callback = rx_f;
-modem.rx.data.buf = rxbuf;
-
-//send_len = sizeof(boardcast_packet);
-
-//sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
-
-//printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
-//memcpy(modem.tx.data.buf, "LoRa", 5);//copy data we'll sent to buffer
-
-modem.tx.data.size = sizeof(boardcast_packet) + 1;//Payload len
-modem.eth.preambleLen = 6;
-// data speed for 64 bytes
-// BW500+SF7=87ms  DIO high=21.7ms 106ms
-// BW500+SF12 = 900ms
-
-modem.eth.bw = BW500;//Bandwidth 62.5KHz
-modem.eth.sf = SF8;//Spreading Factor 12
-modem.eth.ecr = CR8;//Error coding rate CR4/8
-modem.eth.CRC = 1;//Turn on CRC checking
-modem.eth.freq = 434800000;// 434.8MHz
-modem.eth.resetGpioN = 23;//GPIO4 on lora RESET pin
-modem.eth.dio0GpioN = 24;//GPIO17 on lora DIO0 pin to control Rxdone and Txdone interrupts
-modem.eth.outPower = OP20;//Output power
-modem.eth.powerOutPin = PA_BOOST;//Power Amplifire pin
-modem.eth.AGC = 1;//Auto Gain Control
-modem.eth.OCP = 240;// 45 to 240 mA. 0 to turn off protection
-modem.eth.implicitHeader = 0;//Explicit header mode
-modem.eth.syncWord = 0x12;
-//For detail information about SF, Error Coding Rate, Explicit header, Bandwidth, AGC, Over current protection and other features refer to sx127x datasheet https://www.semtech.com/uploads/documents/DS_SX1276-7-8-9_W_APP_V5.pdf
-send_seq = 0;
-LoRa_begin(&modem);
-while (1)
+int main()
 {
-	//memset(txbuf, 'a', sizeof(txbuf));
-	//sprintf(txbuf, "send %d", send_seq);
-	
-	//time (&rawtime);
-	//timeinfo = localtime(&rawtime);		
-	//snprintf(txbuf, sizeof(txbuf), "BOARDCAST %u %s TX %04d-%02d-%02d %02d:%02d:%02d", send_seq,
-	//	hostname, timeinfo->tm_year + 1900, timeinfo->tm_mon + 1, timeinfo->tm_mday, 
-	//  timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+    char mqtt_message[512];
+    char mqtt_topic[256];
+    // unsigned char send_len = 0;
+    unsigned int send_seq = 0;
+    int i = 0;
+    int ret = 0;
+    char hostname[64];
+    char current_date[64];
+    time_t rawtime;
+    struct tm* timeinfo;
+    LoRa_ctl modem;
 
-	memset(&boardcast_packet, 0, sizeof(boardcast_packet));
-	boardcast_packet.AP_Address = strtol(hostname, NULL, 10);
-	boardcast_packet.LRC = 0;
-	boardcast_packet.startMark = TYPE_BOARDCAST;
-	boardcast_packet.time_Count = time(NULL);
-	boardcast_packet.length = sizeof(boardcast_packet) - 1;
-	boardcast_packet.reserved = 0;
-	
-	modem.tx.data.buf = (char *)&boardcast_packet;
-	modem.tx.data.size = sizeof(boardcast_packet) + 1;//Payload len
-	
-	//sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
-	
-	//printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
+    gethostname(hostname, sizeof(hostname));
+    srand((unsigned)time(NULL));
+
+    // printf("%d-%s\n", strtol(hostname, NULL, 10), hostname);
+
+    // printf("%d-%d-%d-%d\n", sizeof(uint8_t), sizeof(uint16_t),
+    // sizeof(uint32_t), sizeof(unsigned long));
+    // return 0;
+
+    printf("clear %d-%d\n", sizeof(boardcast_packet), sizeof(report_packet));
+    memset(&boardcast_packet, 0, sizeof(boardcast_packet));
+    memset(&report_packet, 0, sizeof(report_packet));
+
+    boardcast_packet.AP_Address = strtol(hostname, NULL, 10);
+    boardcast_packet.LRC = 0;
+    boardcast_packet.startMark = TYPE_BOARDCAST;
+    boardcast_packet.time_Count = time(NULL);
+    boardcast_packet.length = sizeof(boardcast_packet) - 1;
+    boardcast_packet.reserved = 0;
+
+    gethostname(hostname, sizeof(hostname));
+
+    // See for typedefs, enumerations and there values in LoRa.h header file
+    modem.spiCS = 0; // Raspberry SPI CE pin number
+    modem.tx.callback = tx_f;
+    modem.tx.data.buf = (char*)&boardcast_packet;
+
+    modem.rx.callback = rx_f;
+    modem.rx.data.buf = rxbuf;
+
+    // send_len = sizeof(boardcast_packet);
+
+    // sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
+
+    // printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
+    // memcpy(modem.tx.data.buf, "LoRa", 5);//copy data we'll sent to buffer
+
+    modem.tx.data.size = sizeof(boardcast_packet) + 1; // Payload len
+    modem.eth.preambleLen = 6;
+    // data speed for 64 bytes
+    // BW500+SF7=87ms  DIO high=21.7ms 106ms
+    // BW500+SF12 = 900ms
+
+    modem.eth.bw = BW500;       // Bandwidth 62.5KHz
+    modem.eth.sf = SF8;         // Spreading Factor 12
+    modem.eth.ecr = CR8;        // Error coding rate CR4/8
+    modem.eth.CRC = 1;          // Turn on CRC checking
+    modem.eth.freq = 434800000; // 434.8MHz
+    modem.eth.resetGpioN = 23;  // GPIO4 on lora RESET pin
+    modem.eth.dio0GpioN =
+        24; // GPIO17 on lora DIO0 pin to control Rxdone and Txdone interrupts
+    modem.eth.outPower = OP20;        // Output power
+    modem.eth.powerOutPin = PA_BOOST; // Power Amplifire pin
+    modem.eth.AGC = 1;                // Auto Gain Control
+    modem.eth.OCP = 240;              // 45 to 240 mA. 0 to turn off protection
+    modem.eth.implicitHeader = 0;     // Explicit header mode
+    modem.eth.syncWord = 0x12;
+    // For detail information about SF, Error Coding Rate, Explicit header,
+    // Bandwidth, AGC, Over current protection and other features refer to
+    // sx127x datasheet
+    // https://www.semtech.com/uploads/documents/DS_SX1276-7-8-9_W_APP_V5.pdf
+    send_seq = 0;
+    LoRa_begin(&modem);
+    while (1)
+    {
+        // memset(txbuf, 'a', sizeof(txbuf));
+        // sprintf(txbuf, "send %d", send_seq);
+
+        // time (&rawtime);
+        // timeinfo = localtime(&rawtime);
+        // snprintf(txbuf, sizeof(txbuf), "BOARDCAST %u %s TX %04d-%02d-%02d
+        // %02d:%02d:%02d", send_seq,
+        //	hostname, timeinfo->tm_year + 1900, timeinfo->tm_mon + 1,
+        //timeinfo->tm_mday,
+        //  timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
+
+        memset(&boardcast_packet, 0, sizeof(boardcast_packet));
+        boardcast_packet.AP_Address = strtol(hostname, NULL, 10);
+        boardcast_packet.LRC = 0;
+        boardcast_packet.startMark = TYPE_BOARDCAST;
+        boardcast_packet.time_Count = time(NULL);
+        boardcast_packet.length = sizeof(boardcast_packet) - 1;
+        boardcast_packet.reserved = 0;
+
+        modem.tx.data.buf = (char*)&boardcast_packet;
+        modem.tx.data.size = sizeof(boardcast_packet) + 1; // Payload len
+
+// sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
+
+// printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
 
 #if 1
-	// send out boardcast packet [BOARDCAST 103 test5 TX 2018-07-30 21:44:56]
-	lora_tx_done = false;
-	LoRa_send(&modem);
+        // send out boardcast packet [BOARDCAST 103 test5 TX 2018-07-30
+        // 21:44:56]
+        lora_tx_done = false;
+        LoRa_send(&modem);
 #if 1
-	for (i = 0; i < modem.tx.data.size; i++) {
-		printf("%02x ", modem.tx.data.buf[i]);
-	}
-	//printf("\n");
+        for (i = 0; i < modem.tx.data.size; i++)
+        {
+            printf("%02x ", modem.tx.data.buf[i]);
+        }
+// printf("\n");
 #endif
-	printf("<<%llu %u CAST Tsym=%f Tpkt=%f payloadSymbNb=%u\n", 
-		current_timestamp(), boardcast_packet.time_Count, 
-		modem.tx.data.Tsym,
-		modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
+        printf("<<%llu %u CAST Tsym=%f Tpkt=%f payloadSymbNb=%u\n",
+               current_timestamp(), boardcast_packet.time_Count,
+               modem.tx.data.Tsym, modem.tx.data.Tpkt,
+               modem.tx.data.payloadSymbNb);
 
-	//printf("<<sleep %u ms to transmitt complete %llu\n", (unsigned long)modem.tx.data.Tpkt, current_timestamp());
-	usleep((unsigned long)(modem.tx.data.Tpkt * 1000));
+        // printf("<<sleep %u ms to transmitt complete %llu\n", (unsigned
+        // long)modem.tx.data.Tpkt, current_timestamp());
+        usleep((unsigned long)(modem.tx.data.Tpkt * 1000));
 
-	while (!lora_tx_done) {
-		printf("<<wait for tx_done..\n");
-		usleep(1000*40);
-	}
+        while (!lora_tx_done)
+        {
+            printf("<<wait for tx_done..\n");
+            usleep(1000 * 40);
+        }
 
-	//usleep(1000*500);
-	//sleep(1);
-	//continue;
+// usleep(1000*500);
+// sleep(1);
+// continue;
 #endif
 
 #if 1
-	// tx done, start to receive
-	printf("wait for report packet ...\n");
-	//usleep(LORA_WAIT_FOR_RECEIVE_MS*100);
-	memset(rxbuf, 0, sizeof(rxbuf));
-	lora_rx_done = false;
-	LoRa_receive(&modem);
+        // tx done, start to receive
+        printf("wait for report packet ...\n");
+        // usleep(LORA_WAIT_FOR_RECEIVE_MS*100);
+        memset(rxbuf, 0, sizeof(rxbuf));
+        lora_rx_done = false;
+        LoRa_receive(&modem);
 
-	//sleep(100);
-	i = 0;
-	while (!lora_rx_done) {
-		//printf("wait rpt %d\n", i);
-		if (i++ > LORA_WAIT_FOR_RECEIVE_COUNT) {
-			//printf("no response, boardcast again %d %u\n", i, time(NULL));
-			break;
-		}
-		usleep(LORA_WAIT_FOR_RECEIVE_MS*1000);// 150ms * 20
-	}
+        // sleep(100);
+        i = 0;
+        while (!lora_rx_done)
+        {
+            // printf("wait rpt %d\n", i);
+            if (i++ > LORA_WAIT_FOR_RECEIVE_COUNT)
+            {
+                // printf("no response, boardcast again %d %u\n", i,
+                // time(NULL));
+                break;
+            }
+            usleep(LORA_WAIT_FOR_RECEIVE_MS * 1000); // 150ms * 20
+        }
 
-	if (lora_rx_done) {
-		// get data, send out ACK
-		if (modem.rx.data.CRC) {
-			printf(">>rxcrcerror\n");
-		} else {
-			//printf(">>rxbuf=[%s]-%d %llu\n", rxbuf, strlen(rxbuf), current_timestamp());
-			// data crc okay, check packet type
-			#if 0
+        if (lora_rx_done)
+        {
+            // get data, send out ACK
+            if (modem.rx.data.CRC)
+            {
+                printf(">>rxcrcerror\n");
+            }
+            else
+            {
+// printf(">>rxbuf=[%s]-%d %llu\n", rxbuf, strlen(rxbuf), current_timestamp());
+// data crc okay, check packet type
+#if 0
 			for (i = 0; i < modem.rx.data.size; i++) {
 				printf("%d:%x\n", i, modem.rx.data.buf[i]);
 			}
-			#endif
-			memset(&report_packet, 0, sizeof(report_packet));
-			memcpy(&report_packet, rxbuf, sizeof(report_packet));
-			
-			if (report_packet.package_StartMark == TYPE_REPORT) {
-				// send out ACK
-				printf(">>RPT: %u ", time(NULL));
-				for (i = 0; i < sizeof(report_packet); i++) {
-					printf("%02x ", rxbuf[i]);
-				}
-				printf("\n");
-				#if 1
-				printf("startmark=0x%x ", report_packet.package_StartMark);
-				printf("len=%d ", report_packet.length);
-				printf("unitAddr=0x%x ", report_packet.SendUnitAddress);
-				printf("send_seq=0x%x ", report_packet.SendUnit_SeqCounter);
-				printf("evnt_type=0x%x ", report_packet.Event_Type);
-				printf("timestamp=%lu ", report_packet.Event_timeStamp);
-				printf("trainID=0x%x ", report_packet.TrainID);
-				printf("%x ", report_packet.TrainNumber1);
-				printf("%x ", report_packet.TrainNumber2);
-				printf("%x ", report_packet.TrainNumber3);
-				printf("Username=[%s] ", report_packet.UserName);
-				printf("UserID=[%s] ", report_packet.UserIdNum);
-				printf("APP_ID=0x%x ", report_packet.AP_ID);
-				printf("BatVol=%d ", report_packet.BatVoltage);
-				printf("resve=0x%x\n", report_packet.reserved);
-				#endif
-				if (MOBILE_REPORT_EVENT_1 == report_packet.Event_Type) {
-					#if 1					
-					memset(mqtt_topic, 0, sizeof(mqtt_topic));
-					sprintf(mqtt_topic, "%s", "rawdata");
-					memset(mqtt_message, 0, sizeof(mqtt_message));
-					sprintf(mqtt_message, "event_type=%u", report_packet.Event_Type);
-					sprintf(mqtt_message, "%s;src_apstation=%u", mqtt_message, strtol(hostname, NULL, 10));
-					sprintf(mqtt_message, "%s;seqno_apstation=%u", mqtt_message, send_seq);
+#endif
+                memset(&report_packet, 0, sizeof(report_packet));
+                memcpy(&report_packet, rxbuf, sizeof(report_packet));
 
-					time(&rawtime);
-					timeinfo = localtime(&rawtime);
-					memset(current_date, 0, sizeof(current_date));
-					sprintf(current_date, "%04d-%02d-%02d-%02d:%02d:%02d", timeinfo->tm_year + 1900, 
-						timeinfo->tm_mon + 1, timeinfo->tm_mday, 
-  						timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
-					sprintf(mqtt_message, "%s;timestamp_apstation=%s", mqtt_message, current_date);
+                if (report_packet.package_StartMark == TYPE_REPORT)
+                {
+                    // send out ACK
+                    printf(">>RPT: %u ", time(NULL));
+                    for (i = 0; i < sizeof(report_packet); i++)
+                    {
+                        printf("%02x ", rxbuf[i]);
+                    }
+                    printf("\n");
+#if 1
+                    printf("startmark=0x%x ", report_packet.package_StartMark);
+                    printf("len=%d ", report_packet.length);
+                    printf("unitAddr=0x%x ", report_packet.SendUnitAddress);
+                    printf("send_seq=0x%x ", report_packet.SendUnit_SeqCounter);
+                    printf("evnt_type=0x%x ", report_packet.Event_Type);
+                    printf("timestamp=%lu ", report_packet.Event_timeStamp);
+                    printf("trainID=0x%x ", report_packet.TrainID);
+                    printf("%x ", report_packet.TrainNumber1);
+                    printf("%x ", report_packet.TrainNumber2);
+                    printf("%x ", report_packet.TrainNumber3);
+                    printf("Username=[%s] ", report_packet.UserName);
+                    printf("UserID=[%s] ", report_packet.UserIdNum);
+                    printf("APP_ID=0x%x ", report_packet.AP_ID);
+                    printf("BatVol=%d ", report_packet.BatVoltage);
+                    printf("resve=0x%x\n", report_packet.reserved);
+#endif
+                    if (MOBILE_REPORT_EVENT_1 == report_packet.Event_Type)
+                    {
+#if 1
+                        memset(mqtt_topic, 0, sizeof(mqtt_topic));
+                        sprintf(mqtt_topic, "%s", "rawdata");
+                        memset(mqtt_message, 0, sizeof(mqtt_message));
+                        sprintf(mqtt_message, "event_type=%u",
+                                report_packet.Event_Type);
+                        sprintf(mqtt_message, "%s;src_apstation=%u",
+                                mqtt_message, strtol(hostname, NULL, 10));
+                        sprintf(mqtt_message, "%s;seqno_apstation=%u",
+                                mqtt_message, send_seq);
 
-					sprintf(mqtt_message, "%s;src_mobile=%u", mqtt_message, report_packet.SendUnitAddress);
-					sprintf(mqtt_message, "%s;seqno_mobile=%u", mqtt_message, report_packet.SendUnit_SeqCounter);
+                        time(&rawtime);
+                        timeinfo = localtime(&rawtime);
+                        memset(current_date, 0, sizeof(current_date));
+                        sprintf(current_date, "%04d-%02d-%02d-%02d:%02d:%02d",
+                                timeinfo->tm_year + 1900, timeinfo->tm_mon + 1,
+                                timeinfo->tm_mday, timeinfo->tm_hour,
+                                timeinfo->tm_min, timeinfo->tm_sec);
+                        sprintf(mqtt_message, "%s;timestamp_apstation=%s",
+                                mqtt_message, current_date);
 
-					rawtime = report_packet.Event_timeStamp;
-					timeinfo = localtime(&rawtime);
-					memset(current_date, 0, sizeof(current_date));
-					sprintf(current_date, "%04d-%02d-%02d-%02d:%02d:%02d", timeinfo->tm_year + 1900, 
-						timeinfo->tm_mon + 1, timeinfo->tm_mday, 
-  						timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);					
-					sprintf(mqtt_message, "%s;timestamp_mobile=%s", mqtt_message, current_date);
-					sprintf(mqtt_message, "%s;train_id=%u", mqtt_message, report_packet.TrainID);
-					sprintf(mqtt_message, "%s;train_seq=%u", mqtt_message, 
-						report_packet.TrainNumber1 << 16 | report_packet.TrainNumber2 << 8 | report_packet.TrainNumber3);
-					sprintf(mqtt_message, "%s;driver_name=%s", mqtt_message, report_packet.UserName);
-					sprintf(mqtt_message, "%s;driver_id=%u", mqtt_message, strtol(report_packet.UserIdNum, NULL, 10));
-					sprintf(mqtt_message, "%s;station_id=%u", mqtt_message, report_packet.AP_ID);
-					sprintf(mqtt_message, "%s;batt_vol=%u", mqtt_message, report_packet.BatVoltage);
-					sprintf(mqtt_message, "%s;reserved=%u", mqtt_message, report_packet.reserved);
-					#endif
-					printf("%llu +MQTT %s-%s \n", current_timestamp(), mqtt_topic, mqtt_message);
-					mqtt_publish_message(mqtt_topic, mqtt_message);
-					printf("%llu -MQTT\n", current_timestamp());
-				} else {
-					printf("Unsupport RPT type %d\n", report_packet.Event_Type);
-				}
-			
-				memset(&ack_packet, 0, sizeof(ack_packet));
-				ack_packet.ACKstartMark = TYPE_ACK;
-				ack_packet.length = sizeof(ack_packet) - 1;
-				ack_packet.AP_Address = strtol(hostname, NULL, 10);
-  				ack_packet.SendUnitAddress = report_packet.SendUnitAddress; 
-				ack_packet.SendUnit_SeqCounter = report_packet.SendUnit_SeqCounter;
-  				ack_packet.crc = 0;
-				modem.tx.data.buf = (char *)&ack_packet;
-				//while (1) {
-				//ack_packet.AP_Address++;
-				modem.tx.data.size = sizeof(ack_packet) + 1;//Payload len
-				#if 1
-				printf("<<ACK:");
-				for (i = 0; i < sizeof(ack_packet); i++) {
-					printf("%02x ", i, txbuf[i]);
-				}
-				//printf("\n");
-				#endif
-				// send ACK, based on test, needs to delay 1.8 seconds for MCU to receive ACK
-				// upload data to mysql
-				// generate the mqtt message, to upload to DB
-				usleep(1000*1000);
-				lora_tx_done = false;
-				LoRa_send(&modem);
+                        sprintf(mqtt_message, "%s;src_mobile=%u", mqtt_message,
+                                report_packet.SendUnitAddress);
+                        sprintf(mqtt_message, "%s;seqno_mobile=%u",
+                                mqtt_message,
+                                report_packet.SendUnit_SeqCounter);
 
-				printf("<<%llu Sending ACK 0x%x length=%d Tsym=%f Tpkt=%f payloadSymbNb=%u\n", 
-					current_timestamp(), ack_packet.AP_Address,
-					modem.tx.data.size, modem.tx.data.Tsym, 
-					modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
+                        rawtime = report_packet.Event_timeStamp;
+                        timeinfo = localtime(&rawtime);
+                        memset(current_date, 0, sizeof(current_date));
+                        sprintf(current_date, "%04d-%02d-%02d-%02d:%02d:%02d",
+                                timeinfo->tm_year + 1900, timeinfo->tm_mon + 1,
+                                timeinfo->tm_mday, timeinfo->tm_hour,
+                                timeinfo->tm_min, timeinfo->tm_sec);
+                        sprintf(mqtt_message, "%s;timestamp_mobile=%s",
+                                mqtt_message, current_date);
+                        sprintf(mqtt_message, "%s;train_id=%u", mqtt_message,
+                                report_packet.TrainID);
+                        sprintf(mqtt_message, "%s;train_seq=%u", mqtt_message,
+                                report_packet.TrainNumber1 << 16 |
+                                    report_packet.TrainNumber2 << 8 |
+                                    report_packet.TrainNumber3);
+                        sprintf(mqtt_message, "%s;driver_name=%s", mqtt_message,
+                                report_packet.UserName);
+                        sprintf(mqtt_message, "%s;driver_id=%u", mqtt_message,
+                                strtol(report_packet.UserIdNum, NULL, 10));
+                        sprintf(mqtt_message, "%s;station_id=%u", mqtt_message,
+                                report_packet.AP_ID);
+                        sprintf(mqtt_message, "%s;batt_vol=%u", mqtt_message,
+                                report_packet.BatVoltage);
+                        sprintf(mqtt_message, "%s;reserved=%u", mqtt_message,
+                                report_packet.reserved);
+#endif
+                        printf("%llu +MQTT %s-%s \n", current_timestamp(),
+                               mqtt_topic, mqtt_message);
+                        mqtt_publish_message(mqtt_topic, mqtt_message);
+                        printf("%llu -MQTT\n", current_timestamp());
+                    }
+                    else
+                    {
+                        printf("Unsupport RPT type %d\n",
+                               report_packet.Event_Type);
+                    }
 
-				printf("<<sleep %u ms to transmitt complete %llu\n", 
-					(unsigned long)modem.tx.data.Tpkt, current_timestamp());
-				usleep((unsigned long)(modem.tx.data.Tpkt * 1000) + 500);
+                    memset(&ack_packet, 0, sizeof(ack_packet));
+                    ack_packet.ACKstartMark = TYPE_ACK;
+                    ack_packet.length = sizeof(ack_packet) - 1;
+                    ack_packet.AP_Address = strtol(hostname, NULL, 10);
+                    ack_packet.SendUnitAddress = report_packet.SendUnitAddress;
+                    ack_packet.SendUnit_SeqCounter =
+                        report_packet.SendUnit_SeqCounter;
+                    ack_packet.crc = 0;
+                    modem.tx.data.buf = (char*)&ack_packet;
+                    // while (1) {
+                    // ack_packet.AP_Address++;
+                    modem.tx.data.size = sizeof(ack_packet) + 1; // Payload len
+#if 1
+                    printf("<<ACK:");
+                    for (i = 0; i < sizeof(ack_packet); i++)
+                    {
+                        printf("%02x ", i, txbuf[i]);
+                    }
+// printf("\n");
+#endif
+                    // send ACK, based on test, needs to delay 1.8 seconds for
+                    // MCU to receive ACK
+                    // upload data to mysql
+                    // generate the mqtt message, to upload to DB
+                    usleep(1000 * 1000);
+                    lora_tx_done = false;
+                    LoRa_send(&modem);
 
-				while (!lora_tx_done) {
-					printf("<<wait..\n");
-					usleep(1000*40);
-				}
+                    printf("<<%llu Sending ACK 0x%x length=%d Tsym=%f Tpkt=%f "
+                           "payloadSymbNb=%u\n",
+                           current_timestamp(), ack_packet.AP_Address,
+                           modem.tx.data.size, modem.tx.data.Tsym,
+                           modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
 
-				// delay after send out ACK
-				usleep(1000*500);
-				//}
-				
-				send_seq++;
-				
-				//usleep(1000*1000);
-				
-			} else {
-				printf(" invalide packet %x\n", report_packet.package_StartMark);
-				usleep((random() % 300)*1000);
-			}
-		
-			//break;
-			
-			#if 0
+                    printf("<<sleep %u ms to transmitt complete %llu\n",
+                           (unsigned long)modem.tx.data.Tpkt,
+                           current_timestamp());
+                    usleep((unsigned long)(modem.tx.data.Tpkt * 1000) + 500);
+
+                    while (!lora_tx_done)
+                    {
+                        printf("<<wait..\n");
+                        usleep(1000 * 40);
+                    }
+
+                    // delay after send out ACK
+                    usleep(1000 * 500);
+                    //}
+
+                    send_seq++;
+
+                    // usleep(1000*1000);
+                }
+                else
+                {
+                    printf(" invalide packet %x\n",
+                           report_packet.package_StartMark);
+                    usleep((random() % 300) * 1000);
+                }
+
+// break;
+
+#if 0
 			if (strstr(rxbuf, "MCU")) {
 				// get the correct packet send out ACK
 				time (&rawtime);
@@ -1276,17 +1382,19 @@ while (1)
 				printf(">>noise packet\n");
 				usleep((random() % 300)*1000);
 			}
-			#endif
-		}
-	}else {
-		printf("NORPT\n");
-		usleep((random() % 300)*1000);
-	}
 #endif
-}
+            }
+        }
+        else
+        {
+            printf("NORPT\n");
+            usleep((random() % 300) * 1000);
+        }
+#endif
+    }
 
-printf("END\n");
+    printf("END\n");
 
-LoRa_end(&modem);
+    LoRa_end(&modem);
 }
 #endif
