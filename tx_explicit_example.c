@@ -93,11 +93,11 @@ static void rx_f(rxData* rx)
     {
         // crc error, discard
         rx->size = 0;
-        printf(">>RXCRCERR\n");
+        syslog(LOG_DEBUG, ">>RXCRCERR\n");
     }
     else
     {
-        printf(">>RXdone %llu CRC=%d size=%d RSSI=%d SNR=%f\n",
+        syslog(LOG_DEBUG, ">>RXdone %llu CRC=%d size=%d RSSI=%d SNR=%f\n",
                current_timestamp(), rx->CRC, rx->size, rx->RSSI, rx->SNR);
     }
 #if 0
@@ -839,7 +839,8 @@ int main()
     // sizeof(uint32_t), sizeof(unsigned long));
     // return 0;
 
-    syslog(LOG_DEBUG, "Boardcat packet=%d report packet=%d\n", sizeof(boardcast_packet), sizeof(report_packet));
+    syslog(LOG_DEBUG, "Boardcat packet=%d report packet=%d\n",
+           sizeof(boardcast_packet), sizeof(report_packet));
     memset(&boardcast_packet, 0, sizeof(boardcast_packet));
     memset(&report_packet, 0, sizeof(report_packet));
 
@@ -909,7 +910,7 @@ int main()
         // snprintf(txbuf, sizeof(txbuf), "BOARDCAST %u %s TX %04d-%02d-%02d
         // %02d:%02d:%02d", send_seq,
         //	hostname, timeinfo->tm_year + 1900, timeinfo->tm_mon + 1,
-        //timeinfo->tm_mday,
+        // timeinfo->tm_mday,
         //  timeinfo->tm_hour, timeinfo->tm_min, timeinfo->tm_sec);
 
         memset(&boardcast_packet, 0, sizeof(boardcast_packet));
@@ -1011,12 +1012,17 @@ int main()
                     }
                     syslog(LOG_DEBUG, "\n");
 #if 1
-                    syslog(LOG_DEBUG, "startmark=0x%x ", report_packet.package_StartMark);
+                    syslog(LOG_DEBUG, "startmark=0x%x ",
+                           report_packet.package_StartMark);
                     syslog(LOG_DEBUG, "len=%d ", report_packet.length);
-                    syslog(LOG_DEBUG, "unitAddr=0x%x ", report_packet.SendUnitAddress);
-                    syslog(LOG_DEBUG, "send_seq=0x%x ", report_packet.SendUnit_SeqCounter);
-                    syslog(LOG_DEBUG, "evnt_type=0x%x ", report_packet.Event_Type);
-                    syslog(LOG_DEBUG, "timestamp=%lu ", report_packet.Event_timeStamp);
+                    syslog(LOG_DEBUG, "unitAddr=0x%x ",
+                           report_packet.SendUnitAddress);
+                    syslog(LOG_DEBUG, "send_seq=0x%x ",
+                           report_packet.SendUnit_SeqCounter);
+                    syslog(LOG_DEBUG, "evnt_type=0x%x ",
+                           report_packet.Event_Type);
+                    syslog(LOG_DEBUG, "timestamp=%lu ",
+                           report_packet.Event_timeStamp);
                     syslog(LOG_DEBUG, "trainID=0x%x ", report_packet.TrainID);
                     syslog(LOG_DEBUG, "%x ", report_packet.TrainNumber1);
                     syslog(LOG_DEBUG, "%x ", report_packet.TrainNumber2);
@@ -1082,8 +1088,8 @@ int main()
                         sprintf(mqtt_message, "%s;reserved=%u", mqtt_message,
                                 report_packet.reserved);
 #endif
-                        syslog(LOG_DEBUG, "%llu +MQTT %s-%s \n", current_timestamp(),
-                               mqtt_topic, mqtt_message);
+                        syslog(LOG_DEBUG, "%llu +MQTT %s-%s \n",
+                               current_timestamp(), mqtt_topic, mqtt_message);
                         mqtt_publish_message(mqtt_topic, mqtt_message);
                         syslog(LOG_DEBUG, "%llu -MQTT\n", current_timestamp());
                     }
@@ -1121,15 +1127,16 @@ int main()
                     lora_tx_done = false;
                     LoRa_send(&modem);
 
-                    syslog(LOG_DEBUG, "<<%llu Sending ACK 0x%x length=%d Tsym=%f Tpkt=%f "
+                    syslog(LOG_DEBUG,
+                           "<<%llu Sending ACK 0x%x length=%d Tsym=%f Tpkt=%f "
                            "payloadSymbNb=%u\n",
                            current_timestamp(), ack_packet.AP_Address,
                            modem.tx.data.size, modem.tx.data.Tsym,
                            modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
 
-                    syslog(LOG_DEBUG, "<<sleep %u ms to transmitt complete %llu\n",
-                           (unsigned long)modem.tx.data.Tpkt,
-                           current_timestamp());
+                    syslog(
+                        LOG_DEBUG, "<<sleep %u ms to transmitt complete %llu\n",
+                        (unsigned long)modem.tx.data.Tpkt, current_timestamp());
                     usleep((unsigned long)(modem.tx.data.Tpkt * 1000) + 500);
 
                     while (!lora_tx_done)

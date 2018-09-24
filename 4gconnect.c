@@ -452,12 +452,20 @@ static void set_blocking(int fd, int should_block)
 static int get_ipaddress(char* ipaddress, int size)
 {
 
+    int ret = -1;
     int fd = 1;
     struct ifreq ifr;
-
     char iface[] = "eth1";
 
+    syslog(LOG_DEBUG, "+%s\n", __func__);
+
     fd = socket(AF_INET, SOCK_DGRAM, 0);
+
+    if (fd < 0)
+    {
+        syslog(LOG_ERR, "socket error! %d(%s)", errno, strerror(errno));
+        return -1;
+    }
 
     // Type of address to retrieve - IPv4 IP address
     ifr.ifr_addr.sa_family = AF_INET;
@@ -465,14 +473,19 @@ static int get_ipaddress(char* ipaddress, int size)
     // Copy the interface name in the ifreq structure
     strncpy(ifr.ifr_name, iface, IFNAMSIZ - 1);
 
-    ioctl(fd, SIOCGIFADDR, &ifr);
-
+    ret = ioctl(fd, SIOCGIFADDR, &ifr);
     close(fd);
+    if (ret < 0)
+    {
+        syslog(LOG_ERR, "ioctl error! %d(%s)", errno, strerror(errno));
+        return -1;
+    }
 
     // display result
     strcpy(ipaddress,
            inet_ntoa(((struct sockaddr_in*)&ifr.ifr_addr)->sin_addr));
-    syslog(LOG_DEBUG, "%s - %s\n", iface, ipaddress);
+
+    syslog(LOG_DEBUG, "%s [%s]\n", iface, ipaddress);
 
     return 0;
 }
@@ -569,7 +582,7 @@ static int www_connect()
         fd = open(portname, O_RDWR | O_NOCTTY | O_SYNC);
         if (fd < 0)
         {
-            syslog(LOG_ERR, "%d Opening %s error %d(%s)", repeat_count,
+            syslog(LOG_ERR, "%d opening %s error %d(%s)", repeat_count,
                    portname, errno, strerror(errno));
             repeat_count++;
             if (repeat_count > 5)
@@ -577,12 +590,14 @@ static int www_connect()
                 syslog(LOG_ERR, "Opening %s error %d(%s)! return...", portname,
                        errno, strerror(errno));
                 return -1;
-                //sync();
-                //system("reboot -f");
+                // sync();
+                // system("reboot -f");
             }
             reset_usb_main(2, NULL);
             sleep(10);
-        } else {
+        }
+        else
+        {
             break;
         }
     }
@@ -742,7 +757,26 @@ static int www_connect()
             break;
         }
 #endif
-        get_ipaddress(ipaddress, sizeof(ipaddress));
+        ret = get_ipaddress(ipaddress, sizeof(ipaddress));
+        if (ret)
+        {
+            syslog(LOG_ERR, "get_IP error!\n");
+            goto cleanup;
+        }
+
+        // Check Ip address 0.0.0.0; 169.
+        if (0 == strncmp("0.0.0.0", ipaddress, 7))
+        {
+            syslog(LOG_ERR, "[%s] incorrect!\n", ipaddress);
+            goto cleanup;
+        }
+
+        if (0 == strncmp("169.", ipaddress, 4))
+        {
+            syslog(LOG_ERR, "[%s] incorrect!\n", ipaddress);
+            goto cleanup;
+        }
+
         sysinfo(&info);
         snprintf(mqtt_message, sizeof(mqtt_message), "IP=%s;UP=%lu", ipaddress,
                  info.uptime);
@@ -984,7 +1018,9 @@ int main()
 
     openlog("4GConnect", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
 
-    syslog(LOG_INFO, "Built on %s %s", __DATE__, __TIME__);
+    syslog(LOG_INFO, "INFO Built on %s %s", __DATE__, __TIME__);
+    syslog(LOG_DEBUG, "DEBUG Built on %s %s", __DATE__, __TIME__);
+    syslog(LOG_ERR, "ERR Built on %s %s", __DATE__, __TIME__);
 
     i = 0;
 #if 0
@@ -996,6 +1032,7 @@ int main()
 #endif
     www_connect();
 
+    syslog(LOG_DEBUG, "APP Exit!\n");
     closelog();
     return 0;
 
