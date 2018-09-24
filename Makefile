@@ -1,4 +1,4 @@
-all: 4gconnect receive_implicit receive_explicit transmit_implicit transmit_explicit
+all: 4gconnect receive_implicit receive_explicit transmit_implicit lora
 
 LoRa.o: LoRa.c
 	gcc -g -c LoRa.c -o LoRa.o -lpigpio -lrt -pthread -lm
@@ -15,8 +15,8 @@ tx_explicit_example.o: tx_explicit_example.c
 rx_explicit_example.o: rx_explicit_example.c
 	gcc -g -c rx_explicit_example.c -o rx_explicit_example.o -lpigpio -lrt -pthread -lm
 
-transmit_explicit: LoRa.o tx_explicit_example.o
-	gcc -g -o transmit_explicit tx_explicit_example.o LoRa.o -lpigpio -lrt -pthread -lm -lsqlite3 -lmosquitto
+lora: LoRa.o tx_explicit_example.o
+	gcc -g -o lora tx_explicit_example.o LoRa.o -lpigpio -lrt -pthread -lm -lsqlite3 -lmosquitto
 
 transmit_implicit: LoRa.o tx_implicit_example.o
 	gcc -o transmit_implicit tx_implicit_example.o LoRa.o -lpigpio -lrt -pthread -lm
