@@ -57,6 +57,13 @@ int LoRa_begin(LoRa_ctl *modem){
     lora_reg_write_byte(modem->spid, REG_DETECTION_THRESHOLD, 0x0a);//DetectionThreshold for SF > 6
     
     lora_set_freq(modem->spid, modem->eth.freq);
+
+    gpioSetMode(SW_T_PIN, PI_OUTPUT);
+    gpioWrite(SW_T_PIN, 0);
+
+    gpioSetMode(SW_R_PIN, PI_OUTPUT);
+    gpioWrite(SW_R_PIN, 0);
+
     return modem->spid;
 }
 
@@ -134,7 +141,15 @@ void lora_remove_dioISR(int gpio_n){
 }
 
 void LoRa_send(LoRa_ctl *modem){
-	//printf("TX\n");
+
+    syslog(LOG_DEBUG, "TX %d=1\n", SW_T_PIN);
+    gpioSetMode(SW_T_PIN, PI_OUTPUT);
+    gpioWrite(SW_T_PIN, 1);
+
+    gpioSetMode(SW_R_PIN, PI_OUTPUT);
+    gpioWrite(SW_R_PIN, 0);
+    usleep(500);
+    
 	if(lora_get_op_mode(modem->spid) != STDBY_MODE){
         lora_set_satandby_mode(modem->spid);
     }
@@ -160,7 +175,14 @@ void LoRa_send(LoRa_ctl *modem){
 
 void LoRa_receive(LoRa_ctl *modem){
 
-	//printf("RX\n");
+    syslog(LOG_DEBUG, "RX %d=1\n", SW_R_PIN);
+    gpioSetMode(SW_T_PIN, PI_OUTPUT);
+    gpioWrite(SW_T_PIN, 0);
+
+    gpioSetMode(SW_R_PIN, PI_OUTPUT);
+    gpioWrite(SW_R_PIN, 1);
+    usleep(500);
+
     LoRa_calculate_packet_t(modem);
     if(modem->eth.lowDataRateOptimize){
         lora_set_lowdatarateoptimize_on(modem->spid);

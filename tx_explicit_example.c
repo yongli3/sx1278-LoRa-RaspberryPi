@@ -45,7 +45,7 @@ typedef struct _AP_BROADCAST_EMPTYPACKAGE
 
 typedef struct _UM_REPORT_PACKAGE
 {
-    uint8_t package_StartMark; //起始符号
+    uint8_t package_StartMark; //起始符号 0x3b = TYPE_REPORT
     uint16_t length;
     uint16_t SendUnitAddress;
     uint16_t SendUnit_SeqCounter; //发出单元序号
