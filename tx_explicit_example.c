@@ -82,7 +82,7 @@ static AP_ACK_PACKAGE ack_packet;
 static bool lora_tx_done = false;
 static bool lora_rx_done = false;
 static bool connected = true;
-static sqlite3* db = NULL;
+static sqlite3* local_db = NULL;
 
 static void rx_f(rxData* rx)
 {
@@ -130,6 +130,11 @@ static void mqttqos_disconnect_callback(struct mosquitto* mosq, void* obj,
                                         int result)
 {
     syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
+    if (result)
+    {
+        syslog(LOG_WARNING, "Reconnect...\n");
+        mosquitto_reconnect(mosq);
+    }
     // connected = false;
 }
 
@@ -148,10 +153,9 @@ static void mqttqos_message_callback(struct mosquitto* mosq, void* obj,
     }
 }
 
-static void mqttqos_publish_callback(struct mosquitto* mosq, void* obj,
-                                     int result)
+static void mqttqos_publish_callback(struct mosquitto* mosq, void* obj, int mid)
 {
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
+    syslog(LOG_NOTICE, "%s mid=%d\n", __func__, mid);
     mosquitto_disconnect((struct mosquitto*)obj);
 }
 
@@ -170,24 +174,6 @@ static void message_callback(struct mosquitto* mosq, void* obj,
     }
 }
 
-static void mosq_log_callback(struct mosquitto* mosq, void* userdata, int level,
-                              const char* str)
-{
-    /* Pring all log messages regardless of level. */
-
-    switch (level)
-    {
-        case MOSQ_LOG_DEBUG:
-        case MOSQ_LOG_INFO:
-        case MOSQ_LOG_NOTICE:
-        case MOSQ_LOG_WARNING:
-        case MOSQ_LOG_ERR:
-        {
-            syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
-        }
-    }
-}
-
 static void mqttqos_log_callback(struct mosquitto* mosq, void* userdata,
                                  int level, const char* str)
 {
@@ -200,12 +186,27 @@ static void mqttqos_log_callback(struct mosquitto* mosq, void* userdata,
         case MOSQ_LOG_NOTICE:
         case MOSQ_LOG_WARNING:
         case MOSQ_LOG_ERR:
-        {
-            // syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
-        }
+        default:
+            // syslog(LOG_NOTICE, "%s level=0x%x:[%s]\n", __func__, level, str);
+            break;
     }
 }
 
+/*
++mqtt_publish_message Version 1.4.10
++mqtt_publish_message topic=[topic] message=[message]
+mqttqos_log_callback level=16:[Client 33_973 sending CONNECT]
+publish message=[message] len=7 size=4
+mqttqos_log_callback level=16:[Client 33_973 sending PUBLISH (d0, q0, r0, m1,
+'topic', ... (7 bytes))]
+mqttqos_log_callback level=16:[Client 33_973 sending DISCONNECT]
+mqttqos_publish_callback rc=1
+mqttqos_log_callback level=16:[Client 33_973 sending DISCONNECT]
+mqttqos_disconnect_callback rc=0
+-mqtt_publish_message ret=0
+
+                                 */
+// mosquitto_sub  -t "#" -v
 static int mqtt_publish_message(char* topic, char* message)
 {
     char msg[256];
@@ -215,8 +216,14 @@ static int mqtt_publish_message(char* topic, char* message)
     char command[255];
     char hostname[64];
     bool clean_session = true;
+    int major, minor, revision;
 
-    syslog(LOG_NOTICE, "+%s topic=[%s] message=[%s]\n", __func__, topic,
+    mosquitto_lib_version(&major, &minor, &revision);
+
+    syslog(LOG_NOTICE, "+%s Version %d.%d.%d\n", __func__, major, minor,
+           revision);
+
+    syslog(LOG_NOTICE, "%s topic=[%s] message=[%s]\n", __func__, topic,
            message);
 
     gethostname(hostname, sizeof(hostname));
@@ -237,126 +244,45 @@ static int mqtt_publish_message(char* topic, char* message)
         mosquitto_publish_callback_set(mosq, mqttqos_publish_callback);
 
         ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
-
         if (ret)
         {
-            syslog(LOG_ERR, "MQTT %s connect error!\n", MQTT_HOST);
+            syslog(LOG_ERR, "MQTT %s connect error! %d %s\n", MQTT_HOST, ret,
+                   strerror(errno));
+            mosquitto_destroy(mosq);
+            mosquitto_lib_cleanup();
             return -1;
         }
-
-#if 0
-		// trigger connect callback
-		do {
-			ret = mosquitto_loop(mosq, -1, 1);
-
-		} while (ret == MOSQ_ERR_SUCCESS && connected);
-#endif
 
         ret = mosquitto_loop_start(mosq);
         if (ret != MOSQ_ERR_SUCCESS)
         {
             syslog(LOG_ERR, "LOOP fail!\n");
+            mosquitto_destroy(mosq);
+            mosquitto_lib_cleanup();
             return -1;
         }
 
         syslog(LOG_NOTICE, "publish message=[%s] len=%d size=%d\n", message,
                strlen(message), sizeof(message));
-        mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
 
+        ret = mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0,
+                                0);
+
+        // mosquitto_disconnect(mosq);
         mosquitto_loop_stop(mosq, false);
-
         mosquitto_destroy(mosq);
     }
     else
     {
-        syslog(LOG_ERR, "mosq new fail!\n");
+        syslog(LOG_ERR, "mosq new fail! %s\n", strerror(errno));
+        ret = -1;
     }
 
     mosquitto_lib_cleanup();
 
-    syslog(LOG_NOTICE, "-%s\n", __func__);
+    syslog(LOG_NOTICE, "-%s ret=%d\n", __func__, ret);
 
-    return 0;
-}
-
-static int mqtt_test(char* topic, char* message)
-{
-    char msg[256];
-    char clientid[24];
-    struct mosquitto* mosq = NULL;
-    int ret = 0;
-    char command[255];
-
-    syslog(LOG_NOTICE, "+%s %s-%s\n", __func__, topic, message);
-
-    // for double safe use system command to send
-
-    sprintf(command, "mosquitto_pub -t \"%s\" -m \"%s;\" -h %s", topic, message,
-            MQTT_HOST);
-
-    ret = system(command);
-    syslog(LOG_NOTICE, "exec [%s] return %d\n", command, ret);
-
-    mosquitto_lib_init();
-
-    memset(clientid, 0, sizeof(clientid));
-    snprintf(clientid, sizeof(clientid) - 1, "clientid_%d", getpid());
-
-    mosq = mosquitto_new(clientid, true, 0);
-
-    if (mosq)
-    {
-        mosquitto_log_callback_set(mosq, mosq_log_callback);
-        mosquitto_connect_callback_set(mosq, connect_callback);
-        mosquitto_message_callback_set(mosq, message_callback);
-
-        ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
-
-        if (ret)
-        {
-            syslog(LOG_ERR, "MQTT %s connect error!\n", MQTT_HOST);
-            return -1;
-        }
-
-        ret = mosquitto_loop_start(mosq);
-        if (ret != MOSQ_ERR_SUCCESS)
-        {
-            syslog(LOG_ERR, "LOOP fail!\n");
-        }
-
-        // while (1)
-        {
-            // sprintf(message, "%s-%d\n", message, current_timestamp());
-            syslog(LOG_NOTICE, "message=[%s] len=%d size=%d\n", message,
-                   strlen(message), sizeof(message));
-            // mosquitto_subscribe(mosq, NULL, "/devices/wb-adc/controls/+", 0);
-            mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0,
-                              0);
-            // break;
-            // usleep(1000*1000);
-        }
-#if 0
-        while (true) {
-            ret = mosquitto_loop(mosq, -1, 1);
-            if(ret){
-                printf("connection error!\n");
-                sleep(10);
-                mosquitto_reconnect(mosq);
-            }
-        }
-#endif
-        mosquitto_destroy(mosq);
-    }
-    else
-    {
-        syslog(LOG_ERR, "mosq new fail!\n");
-    }
-
-    mosquitto_lib_cleanup();
-
-    syslog(LOG_NOTICE, "publish message [%s] okay!\n", message);
-
-    return 0;
+    return -ret;
 }
 
 static int callbackInsert(void* NotUsed, int argc, char** argv, char** colName)
@@ -376,13 +302,13 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
 
     // send this record to MQTT server, and set local = 0
 
-    sqlite3_mutex_enter(sqlite3_db_mutex(db));
+    sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
     sprintf(sqlString, "UPDATE raw set %s = 0;", colName[3]);
-    ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
+    ret = sqlite3_exec(local_db, sqlString, callbackSelect, NULL, &errMsg);
     if (ret != SQLITE_OK)
     {
         syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
-               sqlite3_errmsg(db));
+               sqlite3_errmsg(local_db));
         return -1;
     }
     else
@@ -390,7 +316,7 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
         syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
     }
 
-    sqlite3_mutex_leave(sqlite3_db_mutex(db));
+    sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
 
 #if 0
     for (i = 0; i < argc; i++) {
@@ -403,36 +329,44 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
     return 0;
 }
 
+/*
+CREATE TABLE `rawdata` (
+    `ID`	INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
+    `TIME`	INTEGER,
+    `TOPIC`	TEXT,
+    `MESSAGE`	TEXT,
+    `LOCAL`	INTEGER
+)
+*/
 void* threadFun1(void* ptr)
 {
     char sqlString[256];
     char* errMsg = NULL;
     int ret = -1;
-
     int type = (int)ptr;
-    fprintf(stderr, "Thread1 - %d\n", type);
+
+    syslog(LOG_NOTICE, "+%s\n", __FUNCTION__);
 
     while (1)
     {
-        sqlite3_mutex_enter(sqlite3_db_mutex(db));
+        sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
         // Perform some queries on the database
-        sprintf(
-            sqlString,
-            "INSERT INTO raw(time, message, local) VALUES ('%llu','%s', 1);",
-            current_timestamp(), "lora");
-        ret = sqlite3_exec(db, sqlString, callbackInsert, NULL, &errMsg);
+        sprintf(sqlString, "INSERT INTO rawdata(time, topic, message, local) "
+                           "VALUES ('%llu','%s', '%s', 1);",
+                current_timestamp(), "topic", "message");
+        ret = sqlite3_exec(local_db, sqlString, callbackInsert, NULL, &errMsg);
         if (ret != SQLITE_OK)
         {
             syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
-                   sqlite3_errmsg(db));
+                   sqlite3_errmsg(local_db));
         }
         else
         {
             syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
         }
 
-        sqlite3_mutex_leave(sqlite3_db_mutex(db));
-        usleep(1000000);
+        sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
+        usleep(1000 * 1000);
     }
     return ptr;
 }
@@ -447,22 +381,24 @@ void* threadFun2(void* ptr)
 
     while (1)
     {
-        sqlite3_mutex_enter(sqlite3_db_mutex(db));
+        sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
         // Perform some queries on the database
         // query all local=1; send out and set local=0
-        sprintf(sqlString, "SELECT * from raw where local=1;");
-        ret = sqlite3_exec(db, sqlString, callbackSelect, NULL, &errMsg);
+        sprintf(sqlString, "SELECT * from rawdata where local=1;");
+        ret = sqlite3_exec(local_db, sqlString, callbackSelect, NULL, &errMsg);
         if (ret != SQLITE_OK)
         {
             syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
-                   sqlite3_errmsg(db));
+                   sqlite3_errmsg(local_db));
         }
         else
         {
             syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
         }
 
-        sqlite3_mutex_leave(sqlite3_db_mutex(db));
+        // TODO after publish okay, change local from 1 to 0
+
+        sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
         usleep(1000);
     }
     return ptr;
@@ -769,49 +705,96 @@ cleanup:
 
 #endif
 
-#if 0
-int main() {
-//create a thread for sqlite reading, and publish to mqtt
-// create a thread for lora data RX, and write to local sqlite
-	int i = 0;
+// a thread to query local DB and publish to MQTT server
+static int thread_publish()
+{
+    int i = 0;
     int ret = 0;
     pthread_t thread1, thread2;
     int thr = 1;
     int thr2 = 2;
-    char *errMsg = NULL;
+    char* errMsg = NULL;
     sqlite3_mutex* mutex;
     char sqlString[256];
 
-	openlog("4G", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
+    syslog(LOG_NOTICE, "+%sn", __FUNCTION__);
 
-	syslog(LOG_NOTICE, "version %s", __DATE__);
+    i = 0;
 
-	i = 0;
+    ret = sqlite3_open(DB_NAME, &local_db);
+    if (ret != SQLITE_OK)
+    {
+        printf("Can't open database: %s\n", sqlite3_errmsg(local_db));
 
-    ret = sqlite3_open(DB_NAME, &db);
+        // create the DB
 
-        if( ret != SQLITE_OK)
-        {
-            printf("Can't open database: %s\n", sqlite3_errmsg(db));
-            return -1;
-        } 
-        else
-        {
-            printf("Open database successfully\n");
-        }
-        // insert into raw (time, message) values(2, "aa");
+        return -1;
+    }
+    else
+    {
+        printf("Open database successfully\n");
+    }
+    // insert into raw (time, message) values(2, "aa");
 
     // start the threads for sqlite3 test
-    pthread_create(&thread1, NULL, *threadFun1, (void *) thr);
-    pthread_create(&thread2, NULL, *threadFun2, (void *) thr2);
+    pthread_create(&thread1, NULL, *threadFun1, (void*)thr);
+    pthread_create(&thread2, NULL, *threadFun2, (void*)thr2);
     // wait for threads to finish
-    pthread_join(thread1,NULL);
-    pthread_join(thread2,NULL);
+    pthread_join(thread1, NULL);
+    pthread_join(thread2, NULL);
 
-    sqlite3_close(db);
+    sqlite3_close(local_db);
     return 0;
 }
-#else
+
+static uint32_t g_t = 0;
+
+static void* threadF1(void* ptr)
+{
+    syslog(LOG_NOTICE, "+%s\n", __FUNCTION__);
+    while (g_t < 50)
+    {
+        usleep(1000 * 100);
+        syslog(LOG_NOTICE, "%s %d\n", __FUNCTION__, g_t);
+        g_t++;
+    }
+    return NULL;
+}
+
+static void* threadF2(void* ptr)
+{
+    syslog(LOG_NOTICE, "+%s\n", __FUNCTION__);
+
+    while (g_t < 50)
+    {
+        usleep(1000 * 90);
+        syslog(LOG_NOTICE, "%s %d\n", __FUNCTION__, g_t);
+        g_t++;
+    }
+
+    syslog(LOG_NOTICE, "-%s\n", __FUNCTION__);
+
+    return NULL;
+}
+
+static int thread_test()
+{
+    syslog(LOG_NOTICE, "+%s\n", __FUNCTION__);
+
+    pthread_t thread1, thread2;
+    int thr = 1;
+    int thr2 = 2;
+
+    pthread_create(&thread1, NULL, *threadF1, (void*)thr);
+    pthread_create(&thread2, NULL, *threadF2, (void*)thr2);
+    // wait for threads to finish
+    pthread_join(thread1, NULL);
+    pthread_join(thread2, NULL);
+
+    syslog(LOG_NOTICE, "-%s g_t=%lu\n", __FUNCTION__, g_t);
+    return 0;
+}
+
 int main()
 {
     char mqtt_message[512];
@@ -828,10 +811,26 @@ int main()
 
     openlog("LORA", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
 
-    syslog(LOG_INFO, "Built on %s %s", __DATE__, __TIME__);
+    syslog(LOG_INFO, "INFO Built on %s %s", __DATE__, __TIME__);
+    syslog(LOG_DEBUG, "DBG: Built on %s %s", __DATE__, __TIME__);
+    syslog(LOG_ERR, "ERR: Built on %s %s", __DATE__, __TIME__);
 
     gethostname(hostname, sizeof(hostname));
     srand((unsigned)time(NULL));
+
+#if 1
+    thread_test();
+    sleep(1);
+    syslog(LOG_NOTICE, "%s %d\n", __FUNCTION__, g_t);
+
+    return 0;
+#endif
+#if 1
+    // test local DB
+    mqtt_publish_message("topic", "message");
+
+    return 0;
+#endif
 
     // printf("%d-%s\n", strtol(hostname, NULL, 10), hostname);
 
@@ -1210,4 +1209,3 @@ int main()
 
     LoRa_end(&modem);
 }
-#endif
