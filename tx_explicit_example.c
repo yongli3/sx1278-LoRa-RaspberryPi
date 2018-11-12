@@ -22,7 +22,7 @@
 #define MQTT_HOST "202.120.26.119"
 #define MQTT_PORT 1883
 
-#define DB_NAME "rawdata.db"
+#define DB_NAME "/var/rawdata.db"
 
 #define TYPE_BOARDCAST 0x3a
 #define TYPE_REPORT 0x3b
@@ -313,6 +313,7 @@ static int callbackUpdate(void* NotUsed, int argc, char** argv, char** colName)
     return 0;
 }
 
+// Select the older local =1, publish and update to local = 0
 static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
 {
     char sqlString[256];
@@ -328,20 +329,24 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
     }
 
     sprintf(buf, "%s-%s", argv[1], argv[3]);
-    mqtt_publish_message(argv[2], buf);
+    ret = mqtt_publish_message(argv[2], buf);
+    if (ret)
+    {
+        syslog(LOG_ERR, "%s publish fail!\n", __func__);
+        return 0;
+    }
 
-    // send this record to MQTT server, and set local = 0
+    // Publish okay send this record to MQTT server, and set local = 0
     sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
     sprintf(sqlString, "UPDATE `rawdata` SET `LOCAL`=0 WHERE `%s`=%s",
             colName[0], argv[0]);
-    syslog(LOG_NOTICE, "execute [%s]", sqlString);
+    syslog(LOG_NOTICE, "%s execute [%s]", __func__, sqlString);
 
     ret = sqlite3_exec(local_db, sqlString, callbackUpdate, NULL, &errMsg);
     if (ret != SQLITE_OK)
     {
         syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
                sqlite3_errmsg(local_db));
-        return -1;
     }
     else
     {
@@ -354,8 +359,6 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
         printf("%d:%s-%s\n", i, argv[i], colName[i]);
     }
 #endif
-    // argv[0]; colName[0]
-    // UPDATE tblStuff SET name = 'Temperature10' WHERE name = 'Temperature1'
     syslog(LOG_NOTICE, "-%s argc=%d\n", __func__, argc);
     return 0;
 }
@@ -364,7 +367,6 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
  CREATE TABLE `rawdata` (`ID`
  INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
  `TIME`  INTEGER, `TOPIC` TEXT, `MESSAGE`   TEXT,`LOCAL` INTEGER)
-
  */
 void* threadInsert(void* ptr)
 {
@@ -379,7 +381,6 @@ void* threadInsert(void* ptr)
     while (i++ < 10)
     {
         sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
-        // Perform some queries on the database
         sprintf(sqlString,
                 "INSERT INTO `rawdata`(`TIME`, `TOPIC`, `MESSAGE`, `LOCAL`) "
                 "VALUES (%llu,'%s', '%s', 1)",
@@ -396,7 +397,7 @@ void* threadInsert(void* ptr)
         }
 
         sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
-        usleep(1000 * 1000);
+        usleep(1000 * 500);
     }
     return ptr;
 }
@@ -409,8 +410,8 @@ void* threadUpdate(void* ptr)
     int i = 0;
     char* errMsg = NULL;
     int type = *(int*)ptr;
-    fprintf(stderr, "Thread2 - %d\n", type);
 
+    syslog(LOG_NOTICE, "+%s %d\n", __FUNCTION__, type);
     while (1)
     {
         sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
@@ -420,18 +421,24 @@ void* threadUpdate(void* ptr)
         ret = sqlite3_exec(local_db, sqlString, callbackSelect, NULL, &errMsg);
         if (ret != SQLITE_OK)
         {
-            syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
+            syslog(LOG_ERR, "Can't exec %s: %s\n", sqlString,
                    sqlite3_errmsg(local_db));
         }
         else
         {
             syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
+            // delete old items
+            sprintf(sqlString, "DELETE FROM `rawdata`"
+                               "WHERE LOCAL = 0 AND TIME < %llu",
+                    current_timestamp() - 3600 * 24 * 7 * 1000);
+            ret = sqlite3_exec(local_db, sqlString, NULL, NULL, &errMsg);
+            syslog(LOG_NOTICE, "exec [%s] %d\n", sqlString, ret);
         }
 
-        // TODO after publish okay, change local from 1 to 0
         sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
         usleep(1000 * 1000);
     }
+    syslog(LOG_NOTICE, "-%s %d\n", __FUNCTION__, type);
     return ptr;
 }
 
@@ -791,7 +798,7 @@ static int thread_db()
     // pthread_create(&thread1, NULL, *threadInsert, (void*)&thr);
     pthread_create(&thread2, NULL, *threadUpdate, (void*)&thr2);
     // wait for threads to finish
-    pthread_join(thread1, NULL);
+    // pthread_join(thread1, NULL);
     pthread_join(thread2, NULL);
 #endif
 
@@ -849,8 +856,10 @@ static int thread_test()
 
 int main()
 {
+    char sqlString[256];
     char mqtt_message[512];
     char mqtt_topic[256];
+    char* errMsg = NULL;
     // unsigned char send_len = 0;
     unsigned int send_seq = 0;
     int i = 0;
@@ -870,20 +879,7 @@ int main()
     gethostname(hostname, sizeof(hostname));
     srand((unsigned)time(NULL));
 
-#if 1
     thread_db();
-    // thread_test();
-    sleep(1);
-    syslog(LOG_NOTICE, "%s %d\n", __FUNCTION__, g_t);
-
-    return 0;
-#endif
-#if 1
-    // test local DB
-    mqtt_publish_message("topic", "message");
-
-    return 0;
-#endif
 
     // printf("%d-%s\n", strtol(hostname, NULL, 10), hostname);
 
@@ -976,9 +972,9 @@ int main()
         modem.tx.data.buf = (char*)&boardcast_packet;
         modem.tx.data.size = sizeof(boardcast_packet) + 1; // Payload len
 
-        // sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
+// sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
 
-        // printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
+// printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
 
 #if 1
         // send out boardcast packet [BOARDCAST 103 test5 TX 2018-07-30
@@ -1142,7 +1138,27 @@ int main()
 #endif
                         syslog(LOG_DEBUG, "%llu +MQTT %s-%s \n",
                                current_timestamp(), mqtt_topic, mqtt_message);
-                        mqtt_publish_message(mqtt_topic, mqtt_message);
+
+                        // mqtt_publish_message(mqtt_topic, mqtt_message);
+                        sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
+                        sprintf(sqlString, "INSERT INTO `rawdata`(`TIME`, "
+                                           "`TOPIC`, `MESSAGE`, `LOCAL`) "
+                                           "VALUES (%llu,'%s', '%s', 1)",
+                                current_timestamp(), mqtt_topic, mqtt_message);
+                        ret = sqlite3_exec(local_db, sqlString, callbackInsert,
+                                           NULL, &errMsg);
+                        if (ret != SQLITE_OK)
+                        {
+                            syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
+                                   sqlite3_errmsg(local_db));
+                        }
+                        else
+                        {
+                            syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
+                        }
+
+                        sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
+
                         syslog(LOG_DEBUG, "%llu -MQTT\n", current_timestamp());
                     }
                     else
@@ -1213,7 +1229,7 @@ int main()
                     usleep((random() % 300) * 1000);
                 }
 
-                    // break;
+// break;
 
 #if 0
 			if (strstr(rxbuf, "MCU")) {
