@@ -83,7 +83,11 @@ static bool lora_tx_done = false;
 static bool lora_rx_done = false;
 static bool connected = true;
 static sqlite3* local_db = NULL;
-
+static char* db_create_string =
+    "CREATE TABLE `rawdata` (`ID`    INTEGER NOT "
+    "NULL PRIMARY KEY AUTOINCREMENT UNIQUE, `TIME`  "
+    "INTEGER, `TOPIC` TEXT, `MESSAGE`   "
+    "TEXT,`LOCAL` INTEGER)";
 static void rx_f(rxData* rx)
 {
 
@@ -262,7 +266,7 @@ static int mqtt_publish_message(char* topic, char* message)
             return -1;
         }
 
-        syslog(LOG_NOTICE, "publish message=[%s] len=%d size=%d\n", message,
+        syslog(LOG_NOTICE, "publish message=[%s] len=%lu size=%lu\n", message,
                strlen(message), sizeof(message));
 
         ret = mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0,
@@ -285,9 +289,27 @@ static int mqtt_publish_message(char* topic, char* message)
     return -ret;
 }
 
+static int callbackCreate(void* NotUsed, int argc, char** argv, char** colName)
+{
+    syslog(LOG_NOTICE, "%s\n", __func__);
+    return 0;
+}
+
 static int callbackInsert(void* NotUsed, int argc, char** argv, char** colName)
 {
-    syslog(LOG_NOTICE, "+%s\n", __func__);
+    syslog(LOG_NOTICE, "%s argc=%d\n", __func__, argc);
+    return 0;
+}
+
+static int callbackUpdate(void* NotUsed, int argc, char** argv, char** colName)
+{
+    int i = 0;
+
+    syslog(LOG_NOTICE, "+%s argc=%d\n", __func__, argc);
+    for (i = 0; i < argc; i++)
+    {
+        syslog(LOG_NOTICE, "%s=%s\n", colName[i], argv[i]);
+    }
     return 0;
 }
 
@@ -296,15 +318,25 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
     char sqlString[256];
     char* errMsg = NULL;
     int ret = -1;
-    int i;
+    int i = 0;
+    char buf[256];
     // argc= column number argv=column value
-    syslog(LOG_NOTICE, "+%s argc=%d ID=%s\n", __func__, argc, argv[0]);
+    syslog(LOG_NOTICE, "+%s argc=%d\n", __func__, argc);
+    for (i = 0; i < argc; i++)
+    {
+        syslog(LOG_NOTICE, "%s=%s\n", colName[i], argv[i]);
+    }
+
+    sprintf(buf, "%s-%s", argv[1], argv[3]);
+    mqtt_publish_message(argv[2], buf);
 
     // send this record to MQTT server, and set local = 0
-
     sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
-    sprintf(sqlString, "UPDATE raw set %s = 0;", colName[3]);
-    ret = sqlite3_exec(local_db, sqlString, callbackSelect, NULL, &errMsg);
+    sprintf(sqlString, "UPDATE `rawdata` SET `LOCAL`=0 WHERE `%s`=%s",
+            colName[0], argv[0]);
+    syslog(LOG_NOTICE, "execute [%s]", sqlString);
+
+    ret = sqlite3_exec(local_db, sqlString, callbackUpdate, NULL, &errMsg);
     if (ret != SQLITE_OK)
     {
         syslog(LOG_NOTICE, "Can't exec %s: %s\n", sqlString,
@@ -315,7 +347,6 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
     {
         syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
     }
-
     sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
 
 #if 0
@@ -325,34 +356,33 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
 #endif
     // argv[0]; colName[0]
     // UPDATE tblStuff SET name = 'Temperature10' WHERE name = 'Temperature1'
-
+    syslog(LOG_NOTICE, "-%s argc=%d\n", __func__, argc);
     return 0;
 }
 
 /*
-CREATE TABLE `rawdata` (
-    `ID`	INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
-    `TIME`	INTEGER,
-    `TOPIC`	TEXT,
-    `MESSAGE`	TEXT,
-    `LOCAL`	INTEGER
-)
-*/
-void* threadFun1(void* ptr)
+ CREATE TABLE `rawdata` (`ID`
+ INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT UNIQUE,
+ `TIME`  INTEGER, `TOPIC` TEXT, `MESSAGE`   TEXT,`LOCAL` INTEGER)
+
+ */
+void* threadInsert(void* ptr)
 {
     char sqlString[256];
     char* errMsg = NULL;
     int ret = -1;
-    int type = (int)ptr;
+    int type = *(int*)ptr;
+    int i = 0;
 
-    syslog(LOG_NOTICE, "+%s\n", __FUNCTION__);
+    syslog(LOG_NOTICE, "+%s %d\n", __FUNCTION__, type);
 
-    while (1)
+    while (i++ < 10)
     {
         sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
         // Perform some queries on the database
-        sprintf(sqlString, "INSERT INTO rawdata(time, topic, message, local) "
-                           "VALUES ('%llu','%s', '%s', 1);",
+        sprintf(sqlString,
+                "INSERT INTO `rawdata`(`TIME`, `TOPIC`, `MESSAGE`, `LOCAL`) "
+                "VALUES (%llu,'%s', '%s', 1)",
                 current_timestamp(), "topic", "message");
         ret = sqlite3_exec(local_db, sqlString, callbackInsert, NULL, &errMsg);
         if (ret != SQLITE_OK)
@@ -371,20 +401,22 @@ void* threadFun1(void* ptr)
     return ptr;
 }
 
-void* threadFun2(void* ptr)
+/// select the oldest local=1, publish to MQTT server, and change local to 0
+void* threadUpdate(void* ptr)
 {
     char sqlString[256];
     int ret = -1;
+    int i = 0;
     char* errMsg = NULL;
-    int type = (int)ptr;
+    int type = *(int*)ptr;
     fprintf(stderr, "Thread2 - %d\n", type);
 
     while (1)
     {
         sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
-        // Perform some queries on the database
-        // query all local=1; send out and set local=0
-        sprintf(sqlString, "SELECT * from rawdata where local=1;");
+        // query local=1; send out and set local=0
+        sprintf(sqlString,
+                "SELECT * from rawdata where local=1 order by id limit 1");
         ret = sqlite3_exec(local_db, sqlString, callbackSelect, NULL, &errMsg);
         if (ret != SQLITE_OK)
         {
@@ -397,9 +429,8 @@ void* threadFun2(void* ptr)
         }
 
         // TODO after publish okay, change local from 1 to 0
-
         sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
-        usleep(1000);
+        usleep(1000 * 1000);
     }
     return ptr;
 }
@@ -706,7 +737,7 @@ cleanup:
 #endif
 
 // a thread to query local DB and publish to MQTT server
-static int thread_publish()
+static int thread_db()
 {
     int i = 0;
     int ret = 0;
@@ -717,31 +748,52 @@ static int thread_publish()
     sqlite3_mutex* mutex;
     char sqlString[256];
 
-    syslog(LOG_NOTICE, "+%sn", __FUNCTION__);
+    syslog(LOG_NOTICE, "+%s\n", __FUNCTION__);
 
     i = 0;
 
-    ret = sqlite3_open(DB_NAME, &local_db);
+    ret = sqlite3_open_v2(DB_NAME, &local_db, SQLITE_OPEN_READWRITE, NULL);
     if (ret != SQLITE_OK)
     {
-        printf("Can't open database: %s\n", sqlite3_errmsg(local_db));
-
+        syslog(LOG_ERR, "Can't open database: %s\n", sqlite3_errmsg(local_db));
+        sqlite3_close(local_db);
         // create the DB
-
-        return -1;
+        ret = sqlite3_open_v2(DB_NAME, &local_db,
+                              SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL);
+        if (ret != SQLITE_OK)
+        {
+            syslog(LOG_ERR, "Can't create database: %s\n",
+                   sqlite3_errmsg(local_db));
+            return -1;
+        }
+        sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
+        ret = sqlite3_exec(local_db, db_create_string, callbackCreate, NULL,
+                           &errMsg);
+        if (ret != SQLITE_OK)
+        {
+            syslog(LOG_ERR, "Can't exec %s: %s %s\n", db_create_string,
+                   sqlite3_errmsg(local_db), errMsg);
+            sqlite3_free(errMsg);
+        }
+        else
+        {
+            syslog(LOG_NOTICE, "[%s] okay!\n", db_create_string);
+        }
+        sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
     }
     else
     {
-        printf("Open database successfully\n");
+        syslog(LOG_NOTICE, "Open %s successfully\n", DB_NAME);
     }
-    // insert into raw (time, message) values(2, "aa");
 
+#if 1
     // start the threads for sqlite3 test
-    pthread_create(&thread1, NULL, *threadFun1, (void*)thr);
-    pthread_create(&thread2, NULL, *threadFun2, (void*)thr2);
+    // pthread_create(&thread1, NULL, *threadInsert, (void*)&thr);
+    pthread_create(&thread2, NULL, *threadUpdate, (void*)&thr2);
     // wait for threads to finish
     pthread_join(thread1, NULL);
     pthread_join(thread2, NULL);
+#endif
 
     sqlite3_close(local_db);
     return 0;
@@ -785,13 +837,13 @@ static int thread_test()
     int thr = 1;
     int thr2 = 2;
 
-    pthread_create(&thread1, NULL, *threadF1, (void*)thr);
-    pthread_create(&thread2, NULL, *threadF2, (void*)thr2);
+    pthread_create(&thread1, NULL, *threadF1, (void*)&thr);
+    pthread_create(&thread2, NULL, *threadF2, (void*)&thr2);
     // wait for threads to finish
     pthread_join(thread1, NULL);
     pthread_join(thread2, NULL);
 
-    syslog(LOG_NOTICE, "-%s g_t=%lu\n", __FUNCTION__, g_t);
+    syslog(LOG_NOTICE, "-%s g_t=%u\n", __FUNCTION__, g_t);
     return 0;
 }
 
@@ -819,7 +871,8 @@ int main()
     srand((unsigned)time(NULL));
 
 #if 1
-    thread_test();
+    thread_db();
+    // thread_test();
     sleep(1);
     syslog(LOG_NOTICE, "%s %d\n", __FUNCTION__, g_t);
 
@@ -838,7 +891,7 @@ int main()
     // sizeof(uint32_t), sizeof(unsigned long));
     // return 0;
 
-    syslog(LOG_DEBUG, "Boardcat packet=%d report packet=%d\n",
+    syslog(LOG_DEBUG, "Boardcat packet=%lu report packet=%lu\n",
            sizeof(boardcast_packet), sizeof(report_packet));
     memset(&boardcast_packet, 0, sizeof(boardcast_packet));
     memset(&report_packet, 0, sizeof(report_packet));
@@ -923,9 +976,9 @@ int main()
         modem.tx.data.buf = (char*)&boardcast_packet;
         modem.tx.data.size = sizeof(boardcast_packet) + 1; // Payload len
 
-// sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
+        // sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
 
-// printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
+        // printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
 
 #if 1
         // send out boardcast packet [BOARDCAST 103 test5 TX 2018-07-30
@@ -1004,7 +1057,7 @@ int main()
                 if (report_packet.package_StartMark == TYPE_REPORT)
                 {
                     // send out ACK
-                    syslog(LOG_DEBUG, ">>RPT: %u ", time(NULL));
+                    syslog(LOG_DEBUG, ">>RPT: %lu ", time(NULL));
                     for (i = 0; i < sizeof(report_packet); i++)
                     {
                         syslog(LOG_DEBUG, "%02x ", rxbuf[i]);
@@ -1020,7 +1073,7 @@ int main()
                            report_packet.SendUnit_SeqCounter);
                     syslog(LOG_DEBUG, "evnt_type=0x%x ",
                            report_packet.Event_Type);
-                    syslog(LOG_DEBUG, "timestamp=%lu ",
+                    syslog(LOG_DEBUG, "timestamp=%u ",
                            report_packet.Event_timeStamp);
                     syslog(LOG_DEBUG, "trainID=0x%x ", report_packet.TrainID);
                     syslog(LOG_DEBUG, "%x ", report_packet.TrainNumber1);
@@ -1040,7 +1093,7 @@ int main()
                         memset(mqtt_message, 0, sizeof(mqtt_message));
                         sprintf(mqtt_message, "event_type=%u",
                                 report_packet.Event_Type);
-                        sprintf(mqtt_message, "%s;src_apstation=%u",
+                        sprintf(mqtt_message, "%s;src_apstation=%lu",
                                 mqtt_message, strtol(hostname, NULL, 10));
                         sprintf(mqtt_message, "%s;seqno_apstation=%u",
                                 mqtt_message, send_seq);
@@ -1078,7 +1131,7 @@ int main()
                                     report_packet.TrainNumber3);
                         sprintf(mqtt_message, "%s;driver_name=%s", mqtt_message,
                                 report_packet.UserName);
-                        sprintf(mqtt_message, "%s;driver_id=%u", mqtt_message,
+                        sprintf(mqtt_message, "%s;driver_id=%lu", mqtt_message,
                                 strtol(report_packet.UserIdNum, NULL, 10));
                         sprintf(mqtt_message, "%s;station_id=%u", mqtt_message,
                                 report_packet.AP_ID);
@@ -1114,7 +1167,7 @@ int main()
                     syslog(LOG_DEBUG, "<<ACK:");
                     for (i = 0; i < sizeof(ack_packet); i++)
                     {
-                        syslog(LOG_DEBUG, "%02x ", i, txbuf[i]);
+                        syslog(LOG_DEBUG, "%d=%02x ", i, txbuf[i]);
                     }
 // printf("\n");
 #endif
@@ -1133,9 +1186,10 @@ int main()
                            modem.tx.data.size, modem.tx.data.Tsym,
                            modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
 
-                    syslog(
-                        LOG_DEBUG, "<<sleep %u ms to transmitt complete %llu\n",
-                        (unsigned long)modem.tx.data.Tpkt, current_timestamp());
+                    syslog(LOG_DEBUG,
+                           "<<sleep %lu ms to transmitt complete %llu\n",
+                           (unsigned long)modem.tx.data.Tpkt,
+                           current_timestamp());
                     usleep((unsigned long)(modem.tx.data.Tpkt * 1000) + 500);
 
                     while (!lora_tx_done)
@@ -1159,7 +1213,7 @@ int main()
                     usleep((random() % 300) * 1000);
                 }
 
-// break;
+                    // break;
 
 #if 0
 			if (strstr(rxbuf, "MCU")) {
