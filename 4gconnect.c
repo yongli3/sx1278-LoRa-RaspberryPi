@@ -557,6 +557,15 @@ static int reset_usb_main(int argc, char* argv[])
     }
 }
 
+/*
+ate0
+at+cgsn
+at+cimi
+at+cfun=0
+at+cfun=1
+at+cgact=1,1
+at+zgact=1,1
+*/
 static int www_connect()
 {
     int ret = 0;

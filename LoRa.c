@@ -142,7 +142,7 @@ void lora_remove_dioISR(int gpio_n){
 
 void LoRa_send(LoRa_ctl *modem){
 
-    syslog(LOG_DEBUG, "TX %d=1\n", SW_T_PIN);
+    //syslog(LOG_DEBUG, "TX %d=1\n", SW_T_PIN);
     gpioSetMode(SW_T_PIN, PI_OUTPUT);
     gpioWrite(SW_T_PIN, 1);
 
@@ -175,7 +175,7 @@ void LoRa_send(LoRa_ctl *modem){
 
 void LoRa_receive(LoRa_ctl *modem){
 
-    syslog(LOG_DEBUG, "RX %d=1\n", SW_R_PIN);
+    //syslog(LOG_DEBUG, "RX %d=1\n", SW_R_PIN);
     gpioSetMode(SW_T_PIN, PI_OUTPUT);
     gpioWrite(SW_T_PIN, 0);
 

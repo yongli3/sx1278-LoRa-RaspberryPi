@@ -72,7 +72,7 @@ typedef struct _AP_ACK_PACKAGE
     uint16_t crc;
 } __attribute__((packed)) AP_ACK_PACKAGE;
 
-static char txbuf[LORA_TX_LEN];
+//static char txbuf[LORA_TX_LEN];
 static char rxbuf[LORA_RX_LEN];
 
 static AP_BROADCAST_EMPTYPACKAGE boardcast_packet;
@@ -88,6 +88,9 @@ static char* db_create_string =
     "NULL PRIMARY KEY AUTOINCREMENT UNIQUE, `TIME`  "
     "INTEGER, `TOPIC` TEXT, `MESSAGE`   "
     "TEXT,`LOCAL` INTEGER)";
+
+static pthread_t thread1, thread2;
+
 static void rx_f(rxData* rx)
 {
 
@@ -325,11 +328,11 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
     syslog(LOG_NOTICE, "+%s argc=%d\n", __func__, argc);
     for (i = 0; i < argc; i++)
     {
-        syslog(LOG_NOTICE, "%s=%s\n", colName[i], argv[i]);
+        syslog(LOG_NOTICE, "%d: %s=%s\n", i, colName[i], argv[i]);
     }
 
-    sprintf(buf, "%s-%s", argv[1], argv[3]);
-    ret = mqtt_publish_message(argv[2], buf);
+    // sprintf(buf, "%s-%s", argv[1], argv[3]);
+    ret = mqtt_publish_message(argv[2], argv[3]);
     if (ret)
     {
         syslog(LOG_ERR, "%s publish fail!\n", __func__);
@@ -426,13 +429,13 @@ void* threadUpdate(void* ptr)
         }
         else
         {
-            syslog(LOG_NOTICE, "[%s] okay!\n", sqlString);
+            syslog(LOG_NOTICE, "%s [%s] okay!\n", __func__, sqlString);
             // delete old items
             sprintf(sqlString, "DELETE FROM `rawdata`"
                                "WHERE LOCAL = 0 AND TIME < %llu",
                     current_timestamp() - 3600 * 24 * 7 * 1000);
             ret = sqlite3_exec(local_db, sqlString, NULL, NULL, &errMsg);
-            syslog(LOG_NOTICE, "exec [%s] %d\n", sqlString, ret);
+            syslog(LOG_NOTICE, "%s exec [%s] %d\n", __func__, sqlString, ret);
         }
 
         sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
@@ -744,11 +747,10 @@ cleanup:
 #endif
 
 // a thread to query local DB and publish to MQTT server
-static int thread_db()
+static int thread_pub_db()
 {
     int i = 0;
     int ret = 0;
-    pthread_t thread1, thread2;
     int thr = 1;
     int thr2 = 2;
     char* errMsg = NULL;
@@ -784,7 +786,7 @@ static int thread_db()
         }
         else
         {
-            syslog(LOG_NOTICE, "[%s] okay!\n", db_create_string);
+            syslog(LOG_NOTICE, "%s [%s] okay!\n", __func__, db_create_string);
         }
         sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
     }
@@ -797,12 +799,12 @@ static int thread_db()
     // start the threads for sqlite3 test
     // pthread_create(&thread1, NULL, *threadInsert, (void*)&thr);
     pthread_create(&thread2, NULL, *threadUpdate, (void*)&thr2);
-    // wait for threads to finish
-    // pthread_join(thread1, NULL);
-    pthread_join(thread2, NULL);
+// wait for threads to finish
+// pthread_join(thread1, NULL);
+// pthread_join(thread2, NULL);
 #endif
 
-    sqlite3_close(local_db);
+    syslog(LOG_NOTICE, "-%s\n", __FUNCTION__);
     return 0;
 }
 
@@ -856,8 +858,8 @@ static int thread_test()
 
 int main()
 {
-    char sqlString[256];
-    char mqtt_message[512];
+    char sqlString[1024];
+    char mqtt_message[1024];
     char mqtt_topic[256];
     char* errMsg = NULL;
     // unsigned char send_len = 0;
@@ -879,7 +881,7 @@ int main()
     gethostname(hostname, sizeof(hostname));
     srand((unsigned)time(NULL));
 
-    thread_db();
+    thread_pub_db();
 
     // printf("%d-%s\n", strtol(hostname, NULL, 10), hostname);
 
@@ -982,7 +984,7 @@ int main()
         lora_tx_done = false;
         LoRa_send(&modem);
 #if 1
-        syslog(LOG_DEBUG, "TX size=%d", modem.tx.data.size);
+        syslog(LOG_DEBUG, "**BRD size=%d ", modem.tx.data.size);
         for (i = 0; i < modem.tx.data.size; i++)
         {
             syslog(LOG_DEBUG, "%02x ", modem.tx.data.buf[i]);
@@ -1138,8 +1140,9 @@ int main()
 #endif
                         syslog(LOG_DEBUG, "%llu +MQTT %s-%s \n",
                                current_timestamp(), mqtt_topic, mqtt_message);
-
-                        // mqtt_publish_message(mqtt_topic, mqtt_message);
+#if 0
+                        mqtt_publish_message(mqtt_topic, mqtt_message);
+#else
                         sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
                         sprintf(sqlString, "INSERT INTO `rawdata`(`TIME`, "
                                            "`TOPIC`, `MESSAGE`, `LOCAL`) "
@@ -1158,7 +1161,7 @@ int main()
                         }
 
                         sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
-
+#endif
                         syslog(LOG_DEBUG, "%llu -MQTT\n", current_timestamp());
                     }
                     else
@@ -1183,7 +1186,7 @@ int main()
                     syslog(LOG_DEBUG, "<<ACK:");
                     for (i = 0; i < sizeof(ack_packet); i++)
                     {
-                        syslog(LOG_DEBUG, "%d=%02x ", i, txbuf[i]);
+                        syslog(LOG_DEBUG, "%d=%02x ", i, modem.tx.data.buf[i]);
                     }
 // printf("\n");
 #endif
@@ -1278,4 +1281,8 @@ int main()
     syslog(LOG_DEBUG, "END\n");
 
     LoRa_end(&modem);
+
+    pthread_join(thread2, NULL);
+    sqlite3_close(local_db);
+    return 0;
 }
