@@ -1,7 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <mosquitto.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -13,16 +12,11 @@
 #include <sys/sysinfo.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <syslog.h>
+
 #include <termios.h>
 #include <unistd.h>
 #include "LoRa.h"
-
-#define WWW_INTERNAL_SECONDS 120
-#define MQTT_HOST "202.120.26.119"
-#define MQTT_PORT 1883
-
-#define DB_NAME "/var/rawdata.db"
+#include "common.h"
 
 #define TYPE_BOARDCAST 0x3a
 #define TYPE_REPORT 0x3b
@@ -89,7 +83,8 @@ static char* db_create_string =
     "INTEGER, `TOPIC` TEXT, `MESSAGE`   "
     "TEXT,`LOCAL` INTEGER)";
 
-static pthread_t thread1, thread2;
+//static pthread_t thread1;
+static pthread_t thread2;
 
 static void rx_f(rxData* rx)
 {
@@ -120,176 +115,6 @@ static void tx_f(txData* tx)
 {
     // printf("<<TXdone %llu\n", current_timestamp());
     lora_tx_done = true;
-}
-
-static void connect_callback(struct mosquitto* mosq, void* obj, int result)
-{
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-}
-
-static void mqttqos_connect_callback(struct mosquitto* mosq, void* obj,
-                                     int result)
-{
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-}
-
-static void mqttqos_disconnect_callback(struct mosquitto* mosq, void* obj,
-                                        int result)
-{
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-    if (result)
-    {
-        syslog(LOG_WARNING, "Reconnect...\n");
-        mosquitto_reconnect(mosq);
-    }
-    // connected = false;
-}
-
-static void mqttqos_message_callback(struct mosquitto* mosq, void* obj,
-                                     const struct mosquitto_message* message)
-{
-    bool match = 0;
-    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n",
-           message->payloadlen, (char*)message->payload, message->topic);
-
-    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic,
-                                &match);
-    if (match)
-    {
-        syslog(LOG_NOTICE, "got message for ADC topic\n");
-    }
-}
-
-static void mqttqos_publish_callback(struct mosquitto* mosq, void* obj, int mid)
-{
-    syslog(LOG_NOTICE, "%s mid=%d\n", __func__, mid);
-    mosquitto_disconnect((struct mosquitto*)obj);
-}
-
-static void message_callback(struct mosquitto* mosq, void* obj,
-                             const struct mosquitto_message* message)
-{
-    bool match = 0;
-    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n",
-           message->payloadlen, (char*)message->payload, message->topic);
-
-    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic,
-                                &match);
-    if (match)
-    {
-        syslog(LOG_NOTICE, "got message for ADC topic\n");
-    }
-}
-
-static void mqttqos_log_callback(struct mosquitto* mosq, void* userdata,
-                                 int level, const char* str)
-{
-    /* Pring all log messages regardless of level. */
-
-    switch (level)
-    {
-        case MOSQ_LOG_DEBUG:
-        case MOSQ_LOG_INFO:
-        case MOSQ_LOG_NOTICE:
-        case MOSQ_LOG_WARNING:
-        case MOSQ_LOG_ERR:
-        default:
-            // syslog(LOG_NOTICE, "%s level=0x%x:[%s]\n", __func__, level, str);
-            break;
-    }
-}
-
-/*
-+mqtt_publish_message Version 1.4.10
-+mqtt_publish_message topic=[topic] message=[message]
-mqttqos_log_callback level=16:[Client 33_973 sending CONNECT]
-publish message=[message] len=7 size=4
-mqttqos_log_callback level=16:[Client 33_973 sending PUBLISH (d0, q0, r0, m1,
-'topic', ... (7 bytes))]
-mqttqos_log_callback level=16:[Client 33_973 sending DISCONNECT]
-mqttqos_publish_callback rc=1
-mqttqos_log_callback level=16:[Client 33_973 sending DISCONNECT]
-mqttqos_disconnect_callback rc=0
--mqtt_publish_message ret=0
-
-                                 */
-// mosquitto_sub  -t "#" -v
-static int mqtt_publish_message(char* topic, char* message)
-{
-    char msg[256];
-    char clientid[255];
-    struct mosquitto* mosq = NULL;
-    int ret = 0;
-    char command[255];
-    char hostname[64];
-    bool clean_session = true;
-    int major, minor, revision;
-
-    mosquitto_lib_version(&major, &minor, &revision);
-
-    syslog(LOG_NOTICE, "+%s Version %d.%d.%d\n", __func__, major, minor,
-           revision);
-
-    syslog(LOG_NOTICE, "%s topic=[%s] message=[%s]\n", __func__, topic,
-           message);
-
-    gethostname(hostname, sizeof(hostname));
-
-    mosquitto_lib_init();
-
-    memset(clientid, 0, sizeof(clientid));
-    snprintf(clientid, sizeof(clientid) - 1, "%s_%d", hostname, getpid());
-
-    mosq = mosquitto_new(clientid, clean_session, 0);
-
-    if (mosq)
-    {
-        mosquitto_log_callback_set(mosq, mqttqos_log_callback);
-        mosquitto_connect_callback_set(mosq, mqttqos_connect_callback);
-        mosquitto_disconnect_callback_set(mosq, mqttqos_disconnect_callback);
-        mosquitto_message_callback_set(mosq, mqttqos_message_callback);
-        mosquitto_publish_callback_set(mosq, mqttqos_publish_callback);
-
-        ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
-        if (ret)
-        {
-            syslog(LOG_ERR, "MQTT %s connect error! %d %s\n", MQTT_HOST, ret,
-                   strerror(errno));
-            mosquitto_destroy(mosq);
-            mosquitto_lib_cleanup();
-            return -1;
-        }
-
-        ret = mosquitto_loop_start(mosq);
-        if (ret != MOSQ_ERR_SUCCESS)
-        {
-            syslog(LOG_ERR, "LOOP fail!\n");
-            mosquitto_destroy(mosq);
-            mosquitto_lib_cleanup();
-            return -1;
-        }
-
-        syslog(LOG_NOTICE, "publish message=[%s] len=%lu size=%lu\n", message,
-               strlen(message), sizeof(message));
-
-        ret = mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0,
-                                0);
-
-        // mosquitto_disconnect(mosq);
-        mosquitto_loop_stop(mosq, false);
-        mosquitto_destroy(mosq);
-    }
-    else
-    {
-        syslog(LOG_ERR, "mosq new fail! %s\n", strerror(errno));
-        ret = -1;
-    }
-
-    mosquitto_lib_cleanup();
-
-    syslog(LOG_NOTICE, "-%s ret=%d\n", __func__, ret);
-
-    return -ret;
 }
 
 static int callbackCreate(void* NotUsed, int argc, char** argv, char** colName)
@@ -336,6 +161,7 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
     if (ret)
     {
         syslog(LOG_ERR, "%s publish fail!\n", __func__);
+        // skip the blow logic, keep local = 1, retry
         return 0;
     }
 
@@ -439,7 +265,8 @@ void* threadUpdate(void* ptr)
         }
 
         sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
-        usleep(1000 * 1000);
+        //usleep(2000 * 1000);
+        sleep(3);
     }
     syslog(LOG_NOTICE, "-%s %d\n", __FUNCTION__, type);
     return ptr;
@@ -810,6 +637,8 @@ static int thread_pub_db()
 
 static uint32_t g_t = 0;
 
+#if 0
+
 static void* threadF1(void* ptr)
 {
     syslog(LOG_NOTICE, "+%s\n", __FUNCTION__);
@@ -855,9 +684,11 @@ static int thread_test()
     syslog(LOG_NOTICE, "-%s g_t=%u\n", __FUNCTION__, g_t);
     return 0;
 }
+#endif
 
 int main()
 {
+    char logMsg[1024];
     char sqlString[1024];
     char mqtt_message[1024];
     char mqtt_topic[256];
@@ -984,12 +815,12 @@ int main()
         lora_tx_done = false;
         LoRa_send(&modem);
 #if 1
-        syslog(LOG_DEBUG, "**BRD size=%d ", modem.tx.data.size);
+        memset(logMsg, 0, sizeof(logMsg));
         for (i = 0; i < modem.tx.data.size; i++)
         {
-            syslog(LOG_DEBUG, "%02x ", modem.tx.data.buf[i]);
+            sprintf(logMsg, "%s %02x", logMsg, modem.tx.data.buf[i]);
         }
-// printf("\n");
+        syslog(LOG_DEBUG, "**BRD size=%d [%s]", modem.tx.data.size, logMsg);
 #endif
         syslog(LOG_DEBUG, "<<%llu %u CAST Tsym=%f Tpkt=%f payloadSymbNb=%u\n",
                current_timestamp(), boardcast_packet.time_Count,
@@ -1055,12 +886,12 @@ int main()
                 if (report_packet.package_StartMark == TYPE_REPORT)
                 {
                     // send out ACK
-                    syslog(LOG_DEBUG, ">>RPT: %lu ", time(NULL));
+                    memset(logMsg, 0, sizeof(logMsg));
                     for (i = 0; i < sizeof(report_packet); i++)
                     {
-                        syslog(LOG_DEBUG, "%02x ", rxbuf[i]);
+                        sprintf(logMsg, "%s %02x", logMsg, rxbuf[i]);
                     }
-                    syslog(LOG_DEBUG, "\n");
+                    syslog(LOG_DEBUG, ">>RPT: %lu [%s]", time(NULL), logMsg);
 #if 1
                     syslog(LOG_DEBUG, "startmark=0x%x ",
                            report_packet.package_StartMark);
@@ -1183,11 +1014,12 @@ int main()
                     // ack_packet.AP_Address++;
                     modem.tx.data.size = sizeof(ack_packet) + 1; // Payload len
 #if 1
-                    syslog(LOG_DEBUG, "<<ACK:");
+                    memset(logMsg, 0, sizeof(logMsg));
                     for (i = 0; i < sizeof(ack_packet); i++)
                     {
-                        syslog(LOG_DEBUG, "%d=%02x ", i, modem.tx.data.buf[i]);
+                        sprintf(logMsg, "%s %02x", logMsg, modem.tx.data.buf[i]);
                     }
+                    syslog(LOG_DEBUG, "<<ACK: [%s]", logMsg);
 // printf("\n");
 #endif
                     // send ACK, based on test, needs to delay 1.8 seconds for

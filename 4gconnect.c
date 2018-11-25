@@ -1,7 +1,6 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <mosquitto.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <pthread.h>
@@ -13,16 +12,12 @@
 #include <sys/sysinfo.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <syslog.h>
+
 #include <termios.h>
 #include <unistd.h>
 #include <usb.h>
 
-#define WWW_INTERNAL 120
-#define MQTT_HOST "202.120.26.119"
-#define MQTT_PORT 1883
-
-#define DB_NAME "rawdata.db"
+#include "common.h"
 
 static bool connected = true;
 static sqlite3* db = NULL;
@@ -36,171 +31,6 @@ static long long current_timestamp()
     long long microseconds = te.tv_sec * 1000LL + te.tv_usec / 1000;
     // printf("%lld\n", te.tv_usec);
     return microseconds;
-}
-
-static void connect_callback(struct mosquitto* mosq, void* obj, int result)
-{
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-}
-
-static void mqttqos_connect_callback(struct mosquitto* mosq, void* obj,
-                                     int result)
-{
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-}
-
-static void mqttqos_disconnect_callback(struct mosquitto* mosq, void* obj,
-                                        int result)
-{
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-    // connected = false;
-}
-
-static void mqttqos_message_callback(struct mosquitto* mosq, void* obj,
-                                     const struct mosquitto_message* message)
-{
-    bool match = 0;
-    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n",
-           message->payloadlen, (char*)message->payload, message->topic);
-
-    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic,
-                                &match);
-    if (match)
-    {
-        syslog(LOG_NOTICE, "got message for ADC topic\n");
-    }
-}
-
-static void mqttqos_publish_callback(struct mosquitto* mosq, void* obj,
-                                     int result)
-{
-    syslog(LOG_NOTICE, "+%s rc=%d\n", __func__, result);
-    mosquitto_disconnect((struct mosquitto*)obj);
-}
-
-static void message_callback(struct mosquitto* mosq, void* obj,
-                             const struct mosquitto_message* message)
-{
-    bool match = 0;
-    syslog(LOG_NOTICE, "got message '%.*s' for topic '%s'\n",
-           message->payloadlen, (char*)message->payload, message->topic);
-
-    mosquitto_topic_matches_sub("/devices/wb-adc/controls/+", message->topic,
-                                &match);
-    if (match)
-    {
-        syslog(LOG_NOTICE, "got message for ADC topic\n");
-    }
-}
-
-static void mosq_log_callback(struct mosquitto* mosq, void* userdata, int level,
-                              const char* str)
-{
-    /* Pring all log messages regardless of level. */
-
-    switch (level)
-    {
-        case MOSQ_LOG_DEBUG:
-        case MOSQ_LOG_INFO:
-        case MOSQ_LOG_NOTICE:
-        case MOSQ_LOG_WARNING:
-        case MOSQ_LOG_ERR:
-        {
-            syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
-        }
-    }
-}
-
-static void mqttqos_log_callback(struct mosquitto* mosq, void* userdata,
-                                 int level, const char* str)
-{
-    /* Pring all log messages regardless of level. */
-
-    switch (level)
-    {
-        case MOSQ_LOG_DEBUG:
-        case MOSQ_LOG_INFO:
-        case MOSQ_LOG_NOTICE:
-        case MOSQ_LOG_WARNING:
-        case MOSQ_LOG_ERR:
-        {
-            // syslog(LOG_NOTICE, "%s level=%i:[%s]\n", __func__, level, str);
-        }
-    }
-}
-
-// topic=[test5-2018-08-10 21:31:39] message=[IP=10.101.152.177;UP=10183]
-static int mqtt_publish_message(char* topic, char* message)
-{
-    char msg[256];
-    char clientid[255];
-    struct mosquitto* mosq = NULL;
-    int ret = 0;
-    char command[255];
-    char hostname[64];
-    bool clean_session = true;
-
-    syslog(LOG_NOTICE, "+%s topic=[%s] message=[%s]\n", __func__, topic,
-           message);
-
-    gethostname(hostname, sizeof(hostname));
-
-    mosquitto_lib_init();
-
-    memset(clientid, 0, sizeof(clientid));
-    snprintf(clientid, sizeof(clientid) - 1, "%s_%d", hostname, getpid());
-
-    mosq = mosquitto_new(clientid, clean_session, 0);
-
-    if (mosq)
-    {
-        mosquitto_log_callback_set(mosq, mqttqos_log_callback);
-        mosquitto_connect_callback_set(mosq, mqttqos_connect_callback);
-        mosquitto_disconnect_callback_set(mosq, mqttqos_disconnect_callback);
-        mosquitto_message_callback_set(mosq, mqttqos_message_callback);
-        mosquitto_publish_callback_set(mosq, mqttqos_publish_callback);
-
-        ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
-
-        if (ret)
-        {
-            syslog(LOG_ERR, "MQTT %s connect error!\n", MQTT_HOST);
-            return -1;
-        }
-
-#if 0
-		// trigger connect callback
-		do {
-			ret = mosquitto_loop(mosq, -1, 1);
-
-		} while (ret == MOSQ_ERR_SUCCESS && connected);
-#endif
-
-        ret = mosquitto_loop_start(mosq);
-        if (ret != MOSQ_ERR_SUCCESS)
-        {
-            syslog(LOG_ERR, "LOOP fail!\n");
-            return -1;
-        }
-
-        syslog(LOG_NOTICE, "publish message=[%s] len=%d size=%d\n", message,
-               strlen(message), sizeof(message));
-        mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0, 0);
-
-        mosquitto_loop_stop(mosq, false);
-
-        mosquitto_destroy(mosq);
-    }
-    else
-    {
-        syslog(LOG_ERR, "mosq new fail!\n");
-    }
-
-    mosquitto_lib_cleanup();
-
-    syslog(LOG_NOTICE, "-%s\n", __func__);
-
-    return 0;
 }
 
 static int mqtt_test(char* topic, char* message)
@@ -230,7 +60,7 @@ static int mqtt_test(char* topic, char* message)
 
     if (mosq)
     {
-        mosquitto_log_callback_set(mosq, mosq_log_callback);
+        mosquitto_log_callback_set(mosq, mqttqos_log_callback);
         mosquitto_connect_callback_set(mosq, connect_callback);
         mosquitto_message_callback_set(mosq, message_callback);
 
@@ -805,9 +635,9 @@ static int www_connect()
         if (ret)
         {
             syslog(LOG_ERR, "MQTT error!\n");
-            // break;
+            goto cleanup;
         }
-        sleep(WWW_INTERNAL);
+        sleep(IP_REPORT_INTERNAL);
     }
 cleanup:
     close(fd);
