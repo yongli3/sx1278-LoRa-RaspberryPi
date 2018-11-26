@@ -1,13 +1,13 @@
 #include "common.h"
 
-void connect_callback(struct mosquitto* mosq, void* obj, int result)
-{
-    syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
-}
-
 void mqttqos_connect_callback(struct mosquitto* mosq, void* obj, int result)
 {
     syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
+    if (result)
+    {
+        syslog(LOG_ERR, "connect %d\n", result);
+        exit(result);
+    }
 }
 
 void mqttqos_disconnect_callback(struct mosquitto* mosq, void* obj, int result)
@@ -15,8 +15,9 @@ void mqttqos_disconnect_callback(struct mosquitto* mosq, void* obj, int result)
     syslog(LOG_NOTICE, "%s rc=%d\n", __func__, result);
     if (result)
     {
-        syslog(LOG_WARNING, "Reconnect...\n");
-        mosquitto_reconnect(mosq);
+        syslog(LOG_ERR, "disconnect %d\n", result);
+        //mosquitto_reconnect(mosq);
+        exit(result);
     }
     // connected = false;
 }

@@ -61,8 +61,8 @@ static int mqtt_test(char* topic, char* message)
     if (mosq)
     {
         mosquitto_log_callback_set(mosq, mqttqos_log_callback);
-        mosquitto_connect_callback_set(mosq, connect_callback);
-        mosquitto_message_callback_set(mosq, message_callback);
+        mosquitto_connect_callback_set(mosq, mqttqos_connect_callback);
+        mosquitto_message_callback_set(mosq, mqttqos_message_callback);
 
         ret = mosquitto_connect(mosq, MQTT_HOST, MQTT_PORT, 60);
 
