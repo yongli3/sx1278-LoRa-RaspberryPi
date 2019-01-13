@@ -68,7 +68,7 @@ typedef struct _AP_ACK_PACKAGE
     uint16_t crc;
 } __attribute__((packed)) AP_ACK_PACKAGE;
 
-//static char txbuf[LORA_TX_LEN];
+// static char txbuf[LORA_TX_LEN];
 static char rxbuf[LORA_RX_LEN];
 
 static AP_BROADCAST_EMPTYPACKAGE boardcast_packet;
@@ -85,7 +85,7 @@ static char* db_create_string =
     "INTEGER, `TOPIC` TEXT, `MESSAGE`   "
     "TEXT,`LOCAL` INTEGER)";
 
-//static pthread_t thread1;
+// static pthread_t thread1;
 static pthread_t thread2;
 
 static void rx_f(rxData* rx)
@@ -259,15 +259,16 @@ void* threadUpdate(void* ptr)
         {
             syslog(LOG_NOTICE, "%s [%s] okay!\n", __func__, sqlString);
             // delete old items
-            sprintf(sqlString, "DELETE FROM `rawdata`"
-                               "WHERE LOCAL = 0 AND TIME < %llu",
+            sprintf(sqlString,
+                    "DELETE FROM `rawdata`"
+                    "WHERE LOCAL = 0 AND TIME < %llu",
                     current_timestamp() - 3600 * 24 * 7 * 1000);
             ret = sqlite3_exec(local_db, sqlString, NULL, NULL, &errMsg);
             syslog(LOG_NOTICE, "%s exec [%s] %d\n", __func__, sqlString, ret);
         }
 
         sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
-        //usleep(2000 * 1000);
+        // usleep(2000 * 1000);
         sleep(3);
     }
     syslog(LOG_NOTICE, "-%s %d\n", __FUNCTION__, type);
@@ -808,9 +809,9 @@ int main()
         modem.tx.data.buf = (char*)&boardcast_packet;
         modem.tx.data.size = sizeof(boardcast_packet) + 1; // Payload len
 
-// sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
+        // sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
 
-// printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
+        // printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
 
 #if 1
         // send out boardcast packet [BOARDCAST 103 test5 TX 2018-07-30
@@ -896,7 +897,8 @@ int main()
                         crcReceived += rxbuf[i];
                         sprintf(logMsg, "%s %02x", logMsg, rxbuf[i]);
                     }
-                    syslog(LOG_DEBUG, ">>RPT: %lu [%s] CRCSUM=%x", time(NULL), logMsg, crcReceived);
+                    syslog(LOG_DEBUG, ">>RPT: %lu [%s] CRCSUM=%x", time(NULL),
+                           logMsg, crcReceived);
 #if 1
                     syslog(LOG_DEBUG, "startmark=0x%x ",
                            report_packet.package_StartMark);
@@ -917,7 +919,8 @@ int main()
                     syslog(LOG_DEBUG, "UserID=[%s] ", report_packet.UserIdNum);
                     syslog(LOG_DEBUG, "APP_ID=0x%x ", report_packet.AP_ID);
                     syslog(LOG_DEBUG, "BatVol=%d ", report_packet.BatVoltage);
-                    syslog(LOG_DEBUG, "reserved=0x%x\n", report_packet.reserved);
+                    syslog(LOG_DEBUG, "reserved=0x%x\n",
+                           report_packet.reserved);
 #endif
                     if (MOBILE_REPORT_EVENT_1 == report_packet.Event_Type)
                     {
@@ -928,21 +931,25 @@ int main()
 
                         if (crcReceived)
                         {
-                          // crc error, event_type
-                          syslog(LOG_ERR, "CRCSUM error! %d\n", crcReceived);
+                            // crc error, event_type
+                            syslog(LOG_ERR, "CRCSUM error! %d\n", crcReceived);
 
-			  if (report_packet.reserved) {
-                          sprintf(mqtt_message, "event_type=%u",
-                          MOBILE_REPORT_CRC_ERROR);
-			 } else {
-				// CRC feature is not enabled
-				sprintf(mqtt_message, "event_type=%u",
-                                report_packet.Event_Type);
-			 }
-                        } else
+                            if (report_packet.reserved)
+                            {
+                                sprintf(mqtt_message, "event_type=%u",
+                                        MOBILE_REPORT_CRC_ERROR);
+                            }
+                            else
+                            {
+                                // CRC feature is not enabled
+                                sprintf(mqtt_message, "event_type=%u",
+                                        report_packet.Event_Type);
+                            }
+                        }
+                        else
                         {
                             sprintf(mqtt_message, "event_type=%u",
-                                report_packet.Event_Type);
+                                    report_packet.Event_Type);
                         }
                         sprintf(mqtt_message, "%s;src_apstation=%lu",
                                 mqtt_message, strtol(hostname, NULL, 10));
@@ -997,9 +1004,10 @@ int main()
                         mqtt_publish_message(mqtt_topic, mqtt_message);
 #else
                         sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
-                        sprintf(sqlString, "INSERT INTO `rawdata`(`TIME`, "
-                                           "`TOPIC`, `MESSAGE`, `LOCAL`) "
-                                           "VALUES (%llu,'%s', '%s', 1)",
+                        sprintf(sqlString,
+                                "INSERT INTO `rawdata`(`TIME`, "
+                                "`TOPIC`, `MESSAGE`, `LOCAL`) "
+                                "VALUES (%llu,'%s', '%s', 1)",
                                 current_timestamp(), mqtt_topic, mqtt_message);
                         ret = sqlite3_exec(local_db, sqlString, callbackInsert,
                                            NULL, &errMsg);
@@ -1039,7 +1047,8 @@ int main()
                     memset(logMsg, 0, sizeof(logMsg));
                     for (i = 0; i < sizeof(ack_packet); i++)
                     {
-                        sprintf(logMsg, "%s %02x", logMsg, modem.tx.data.buf[i]);
+                        sprintf(logMsg, "%s %02x", logMsg,
+                                modem.tx.data.buf[i]);
                     }
                     syslog(LOG_DEBUG, "<<ACK: [%s]", logMsg);
 // printf("\n");
@@ -1086,7 +1095,7 @@ int main()
                     usleep((random() % 300) * 1000);
                 }
 
-// break;
+                // break;
 
 #if 0
 			if (strstr(rxbuf, "MCU")) {
