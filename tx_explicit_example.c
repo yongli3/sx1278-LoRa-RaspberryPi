@@ -27,6 +27,8 @@
 #define MOBILE_REPORT_EVENT_3 3
 #define MOBILE_REPORT_EVENT_4 4
 
+#define MOBILE_REPORT_CRC_ERROR 254
+
 typedef struct _AP_BROADCAST_EMPTYPACKAGE
 {
     uint8_t startMark; //起始符号
@@ -695,6 +697,7 @@ int main()
     char* errMsg = NULL;
     // unsigned char send_len = 0;
     unsigned int send_seq = 0;
+    unsigned char crcReceived = 0;
     int i = 0;
     int ret = 0;
     char hostname[64];
@@ -887,11 +890,13 @@ int main()
                 {
                     // send out ACK
                     memset(logMsg, 0, sizeof(logMsg));
+                    crcReceived = 0;
                     for (i = 0; i < sizeof(report_packet); i++)
                     {
+                        crcReceived += rxbuf[i];
                         sprintf(logMsg, "%s %02x", logMsg, rxbuf[i]);
                     }
-                    syslog(LOG_DEBUG, ">>RPT: %lu [%s]", time(NULL), logMsg);
+                    syslog(LOG_DEBUG, ">>RPT: %lu [%s] CRCSUM=%x", time(NULL), logMsg, crcReceived);
 #if 1
                     syslog(LOG_DEBUG, "startmark=0x%x ",
                            report_packet.package_StartMark);
@@ -912,7 +917,7 @@ int main()
                     syslog(LOG_DEBUG, "UserID=[%s] ", report_packet.UserIdNum);
                     syslog(LOG_DEBUG, "APP_ID=0x%x ", report_packet.AP_ID);
                     syslog(LOG_DEBUG, "BatVol=%d ", report_packet.BatVoltage);
-                    syslog(LOG_DEBUG, "resve=0x%x\n", report_packet.reserved);
+                    syslog(LOG_DEBUG, "reserved=0x%x\n", report_packet.reserved);
 #endif
                     if (MOBILE_REPORT_EVENT_1 == report_packet.Event_Type)
                     {
@@ -920,8 +925,25 @@ int main()
                         memset(mqtt_topic, 0, sizeof(mqtt_topic));
                         sprintf(mqtt_topic, "%s", "rawdata");
                         memset(mqtt_message, 0, sizeof(mqtt_message));
-                        sprintf(mqtt_message, "event_type=%u",
+
+                        if (crcReceived)
+                        {
+                          // crc error, event_type
+                          syslog(LOG_ERR, "CRCSUM error! %d\n", crcReceived);
+
+			  if (report_packet.reserved) {
+                          sprintf(mqtt_message, "event_type=%u",
+                          MOBILE_REPORT_CRC_ERROR);
+			 } else {
+				// CRC feature is not enabled
+				sprintf(mqtt_message, "event_type=%u",
                                 report_packet.Event_Type);
+			 }
+                        } else
+                        {
+                            sprintf(mqtt_message, "event_type=%u",
+                                report_packet.Event_Type);
+                        }
                         sprintf(mqtt_message, "%s;src_apstation=%lu",
                                 mqtt_message, strtol(hostname, NULL, 10));
                         sprintf(mqtt_message, "%s;seqno_apstation=%u",
