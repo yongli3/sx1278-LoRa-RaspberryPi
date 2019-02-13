@@ -637,7 +637,7 @@ static int www_connect()
             syslog(LOG_ERR, "MQTT error!\n");
             goto cleanup;
         }
-        sleep(IP_REPORT_INTERNAL);
+        sleep(IP_REPORT_INTERNAL_SECONDS);
     }
 cleanup:
     close(fd);

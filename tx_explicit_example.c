@@ -257,14 +257,20 @@ void* threadUpdate(void* ptr)
         }
         else
         {
-            syslog(LOG_NOTICE, "%s [%s] okay!\n", __func__, sqlString);
+            //syslog(LOG_NOTICE, "%s [%s] okay!\n", __func__, sqlString);
             // delete old items
             sprintf(sqlString,
                     "DELETE FROM `rawdata`"
                     "WHERE LOCAL = 0 AND TIME < %llu",
                     current_timestamp() - 3600 * 24 * 7 * 1000);
             ret = sqlite3_exec(local_db, sqlString, NULL, NULL, &errMsg);
-            syslog(LOG_NOTICE, "%s exec [%s] %d\n", __func__, sqlString, ret);
+	    if (ret != SQLITE_OK)
+            {
+                syslog(LOG_ERR, "Can't exec %s: %s\n", sqlString,
+                   sqlite3_errmsg(local_db));
+            } else {
+                //syslog(LOG_NOTICE, "%s exec [%s] %d\n", __func__, sqlString, ret);
+	    }
         }
 
         sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
@@ -837,7 +843,7 @@ int main()
 
         while (!lora_tx_done)
         {
-            syslog(LOG_DEBUG, "<<wait for tx_done..\n");
+            syslog(LOG_DEBUG, "<<Wait for tx_done\n");
             usleep(1000 * 40);
         }
 
@@ -848,7 +854,7 @@ int main()
 
 #if 1
         // tx done, start to receive
-        syslog(LOG_DEBUG, "wait for report packet ...\n");
+        syslog(LOG_DEBUG, "Wait for RPT\n");
         // usleep(LORA_WAIT_FOR_RECEIVE_MS*100);
         memset(rxbuf, 0, sizeof(rxbuf));
         lora_rx_done = false;

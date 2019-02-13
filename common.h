@@ -12,7 +12,7 @@
 
 #define DB_NAME "/var/rawdata.db"
 
-#define IP_REPORT_INTERNAL 240
+#define IP_REPORT_INTERNAL_SECONDS 480
 #define MQTT_HOST "202.120.26.119"
 #define MQTT_PORT 1883
 
