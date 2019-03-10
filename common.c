@@ -94,11 +94,11 @@ mqttqos_disconnect_callback rc=0
 // mosquitto_sub  -t "#" -v
 int mqtt_publish_message(char* topic, char* message)
 {
-    char msg[256];
+    //char msg[256];
     char clientid[255];
     struct mosquitto* mosq = NULL;
     int ret = 0;
-    char command[255];
+    //char command[255];
     char hostname[64];
     bool clean_session = true;
     int major, minor, revision;
@@ -147,7 +147,7 @@ int mqtt_publish_message(char* topic, char* message)
             return -1;
         }
 
-        syslog(LOG_NOTICE, "publish message=[%s] len=%lu size=%lu\n", message,
+        syslog(LOG_NOTICE, "publish message=[%s] len=%u size=%u\n", message,
                strlen(message), sizeof(message));
 
         ret = mosquitto_publish(mosq, NULL, topic, strlen(message), message, 0,

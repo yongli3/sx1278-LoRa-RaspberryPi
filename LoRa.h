@@ -211,6 +211,7 @@ typedef struct {
     LoRa_Tx tx;//tx structure
 } LoRa_ctl;
 
+#if 0
 static void radio_tx()
 {
 	gpioWrite(SW_T_PIN, 1);
@@ -222,7 +223,9 @@ static void radio_rx()
 	gpioWrite(SW_T_PIN, 1);
 	gpioWrite(SW_R_PIN, 0);
 }
+#endif
 
+#if 0
 // ms
 static long long current_timestamp() {
     struct timeval te; 
@@ -232,6 +235,7 @@ static long long current_timestamp() {
     //printf("%lld\n", te.tv_usec);
     return microseconds;
 }
+#endif
 
 int LoRa_begin(LoRa_ctl *modem);
 void LoRa_send(LoRa_ctl *modem);

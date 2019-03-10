@@ -6,8 +6,20 @@ static char rxbuf[LORA_RX_LEN];
 static bool lora_tx_done = false;
 static bool lora_rx_done = false;
 
+static long long current_timestamp()
+{
+    struct timeval te;
+    gettimeofday(&te, NULL); // get current time
+    // long long milliseconds = te.tv_sec*1000*1000LL + te.tv_usec; // calculate
+    // microseconds
+    long long microseconds = te.tv_sec * 1000LL + te.tv_usec / 1000;
+    // printf("%lld\n", te.tv_usec);
+    return microseconds;
+}
+
+
 static void rx_f(rxData *rx){
-	int i = 0;
+//	int i = 0;
 
 	if (rx->CRC) {
 		// crc error, discard
@@ -34,7 +46,7 @@ int main(){
 	int ack_retry_count = 0;
 	unsigned int send_seq = 0;
 	int i = 0;
-	int ret = 0;
+	//int ret = 0;
 	char hostname[128];
 	time_t rawtime;
 	struct tm * timeinfo;
@@ -94,7 +106,7 @@ while (1) {
 			continue;
 		} else {
 			// crc okay, check if it is the correct format
-			printf(">>%lu %llu\n", modem.rx.data.size, current_timestamp());
+			printf(">>%d %llu\n", modem.rx.data.size, current_timestamp());
 
 			for (i = 0; i < modem.rx.data.size; i++) {
 				printf("%d:%x\n", i, rxbuf[i]);
@@ -128,7 +140,7 @@ while (1) {
 					modem.tx.data.buf, strlen(modem.tx.data.buf), modem.tx.data.Tsym, 
 					modem.tx.data.Tpkt, modem.tx.data.payloadSymbNb);
 
-				printf("<<sleep %u ms to transmitt complete %llu\n", 
+				printf("<<sleep %lu ms to transmitt complete %llu\n", 
 					(unsigned long)modem.tx.data.Tpkt, current_timestamp());
 				usleep((unsigned long)(modem.tx.data.Tpkt * 1000));
 

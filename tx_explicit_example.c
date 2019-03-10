@@ -71,13 +71,16 @@ typedef struct _AP_ACK_PACKAGE
 // static char txbuf[LORA_TX_LEN];
 static char rxbuf[LORA_RX_LEN];
 
+// version string
+static char versionString[128];
+
 static AP_BROADCAST_EMPTYPACKAGE boardcast_packet;
 static UM_REPORT_PACKAGE report_packet;
 static AP_ACK_PACKAGE ack_packet;
 
 static bool lora_tx_done = false;
 static bool lora_rx_done = false;
-static bool connected = true;
+//static bool connected = true;
 static sqlite3* local_db = NULL;
 static char* db_create_string =
     "CREATE TABLE `rawdata` (`ID`    INTEGER NOT "
@@ -88,10 +91,21 @@ static char* db_create_string =
 // static pthread_t thread1;
 static pthread_t thread2;
 
+static long long current_timestamp()
+{
+    struct timeval te;
+    gettimeofday(&te, NULL); // get current time
+    // long long milliseconds = te.tv_sec*1000*1000LL + te.tv_usec; // calculate
+    // microseconds
+    long long microseconds = te.tv_sec * 1000LL + te.tv_usec / 1000;
+    // printf("%lld\n", te.tv_usec);
+    return microseconds;
+}
+
 static void rx_f(rxData* rx)
 {
 
-    int i = 0;
+//    int i = 0;
 
     if (rx->CRC)
     {
@@ -150,7 +164,7 @@ static int callbackSelect(void* NotUsed, int argc, char** argv, char** colName)
     char* errMsg = NULL;
     int ret = -1;
     int i = 0;
-    char buf[256];
+   // char buf[256];
     // argc= column number argv=column value
     syslog(LOG_NOTICE, "+%s argc=%d\n", __func__, argc);
     for (i = 0; i < argc; i++)
@@ -238,7 +252,7 @@ void* threadUpdate(void* ptr)
 {
     char sqlString[256];
     int ret = -1;
-    int i = 0;
+   // int i = 0;
     char* errMsg = NULL;
     int type = *(int*)ptr;
 
@@ -257,20 +271,22 @@ void* threadUpdate(void* ptr)
         }
         else
         {
-            //syslog(LOG_NOTICE, "%s [%s] okay!\n", __func__, sqlString);
+            // syslog(LOG_NOTICE, "%s [%s] okay!\n", __func__, sqlString);
             // delete old items
-            sprintf(sqlString,
-                    "DELETE FROM `rawdata`"
-                    "WHERE LOCAL = 0 AND TIME < %llu",
+            sprintf(sqlString, "DELETE FROM `rawdata`"
+                               "WHERE LOCAL = 0 AND TIME < %llu",
                     current_timestamp() - 3600 * 24 * 7 * 1000);
             ret = sqlite3_exec(local_db, sqlString, NULL, NULL, &errMsg);
-	    if (ret != SQLITE_OK)
+            if (ret != SQLITE_OK)
             {
                 syslog(LOG_ERR, "Can't exec %s: %s\n", sqlString,
-                   sqlite3_errmsg(local_db));
-            } else {
-                //syslog(LOG_NOTICE, "%s exec [%s] %d\n", __func__, sqlString, ret);
-	    }
+                       sqlite3_errmsg(local_db));
+            }
+            else
+            {
+                // syslog(LOG_NOTICE, "%s exec [%s] %d\n", __func__, sqlString,
+                // ret);
+            }
         }
 
         sqlite3_mutex_leave(sqlite3_db_mutex(local_db));
@@ -281,6 +297,7 @@ void* threadUpdate(void* ptr)
     return ptr;
 }
 
+#if 0
 static int set_interface_attribs(int fd, int speed, int parity)
 {
     struct termios tty;
@@ -365,6 +382,7 @@ static int get_ipaddress(char* ipaddress, int size)
 
     return 0;
 }
+#endif
 
 int time_test()
 {
@@ -585,17 +603,15 @@ cleanup:
 // a thread to query local DB and publish to MQTT server
 static int thread_pub_db()
 {
-    int i = 0;
+//    int i = 0;
     int ret = 0;
-    int thr = 1;
+//    int thr = 1;
     int thr2 = 2;
     char* errMsg = NULL;
-    sqlite3_mutex* mutex;
-    char sqlString[256];
+ //   sqlite3_mutex* mutex;
+  //  char sqlString[256];
 
     syslog(LOG_NOTICE, "+%s\n", __FUNCTION__);
-
-    i = 0;
 
     ret = sqlite3_open_v2(DB_NAME, &local_db, SQLITE_OPEN_READWRITE, NULL);
     if (ret != SQLITE_OK)
@@ -644,7 +660,7 @@ static int thread_pub_db()
     return 0;
 }
 
-static uint32_t g_t = 0;
+//static uint32_t g_t = 0;
 
 #if 0
 
@@ -715,7 +731,9 @@ int main()
 
     openlog("LORA", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
 
-    syslog(LOG_INFO, "INFO Built on %s %s", __DATE__, __TIME__);
+    sprintf(versionString, "%04d%02d%02d", BUILD_YEAR, BUILD_MONTH, BUILD_DAY);
+
+    syslog(LOG_INFO, "INFO Built on %s", versionString);
     syslog(LOG_DEBUG, "DBG: Built on %s %s", __DATE__, __TIME__);
     syslog(LOG_ERR, "ERR: Built on %s %s", __DATE__, __TIME__);
 
@@ -730,7 +748,7 @@ int main()
     // sizeof(uint32_t), sizeof(unsigned long));
     // return 0;
 
-    syslog(LOG_DEBUG, "Boardcat packet=%lu report packet=%lu\n",
+    syslog(LOG_DEBUG, "Boardcat packet=%u report packet=%u\n",
            sizeof(boardcast_packet), sizeof(report_packet));
     memset(&boardcast_packet, 0, sizeof(boardcast_packet));
     memset(&report_packet, 0, sizeof(report_packet));
@@ -815,9 +833,9 @@ int main()
         modem.tx.data.buf = (char*)&boardcast_packet;
         modem.tx.data.size = sizeof(boardcast_packet) + 1; // Payload len
 
-        // sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
+// sprintf(txbuf, "LoraLongTest%u", (unsigned)time(NULL));
 
-        // printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
+// printf("%s %d\n", modem.tx.data.buf, strlen(modem.tx.data.buf));
 
 #if 1
         // send out boardcast packet [BOARDCAST 103 test5 TX 2018-07-30
@@ -996,7 +1014,7 @@ int main()
                         sprintf(mqtt_message, "%s;driver_name=%s", mqtt_message,
                                 report_packet.UserName);
                         sprintf(mqtt_message, "%s;driver_id=%lu", mqtt_message,
-                                strtol(report_packet.UserIdNum, NULL, 10));
+                                strtol((char *)report_packet.UserIdNum, NULL, 10));
                         sprintf(mqtt_message, "%s;station_id=%u", mqtt_message,
                                 report_packet.AP_ID);
                         sprintf(mqtt_message, "%s;batt_vol=%u", mqtt_message,
@@ -1010,10 +1028,9 @@ int main()
                         mqtt_publish_message(mqtt_topic, mqtt_message);
 #else
                         sqlite3_mutex_enter(sqlite3_db_mutex(local_db));
-                        sprintf(sqlString,
-                                "INSERT INTO `rawdata`(`TIME`, "
-                                "`TOPIC`, `MESSAGE`, `LOCAL`) "
-                                "VALUES (%llu,'%s', '%s', 1)",
+                        sprintf(sqlString, "INSERT INTO `rawdata`(`TIME`, "
+                                           "`TOPIC`, `MESSAGE`, `LOCAL`) "
+                                           "VALUES (%llu,'%s', '%s', 1)",
                                 current_timestamp(), mqtt_topic, mqtt_message);
                         ret = sqlite3_exec(local_db, sqlString, callbackInsert,
                                            NULL, &errMsg);
@@ -1101,7 +1118,7 @@ int main()
                     usleep((random() % 300) * 1000);
                 }
 
-                // break;
+// break;
 
 #if 0
 			if (strstr(rxbuf, "MCU")) {

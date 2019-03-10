@@ -19,6 +19,9 @@
 
 #include "common.h"
 
+// version string
+static char versionString[128];
+
 static bool connected = true;
 static sqlite3* db = NULL;
 
@@ -414,6 +417,9 @@ static int www_connect()
     time_t rawtime;
     struct tm* timeinfo;
     struct sysinfo info;
+    struct stat fileSt;
+    struct statvfs statRootFs;
+    struct statvfs statVarFs;	
 
     repeat_count = 0;
     while (1)
@@ -531,20 +537,39 @@ static int www_connect()
         goto cleanup;
     };
 
-    memset(write_buffer, 0, sizeof(write_buffer));
-    sprintf(write_buffer, "%s", "AT+CGACT=1,1\r\n");
-    tcflush(fd, TCOFLUSH);
-    size = write(fd, write_buffer, strlen(write_buffer));
-    syslog(LOG_DEBUG, "write %s %d\n", write_buffer, size);
-    sleep(5);
-    memset(read_buffer, 0, sizeof(read_buffer));
-    size = read(fd, read_buffer, sizeof(read_buffer));
-    syslog(LOG_DEBUG, "read %d [%s]\n", size, read_buffer);
-    if (NULL == strstr(read_buffer, "OK"))
+    // re-try for this command
+    repeat_count = 0;
+    while (1)
     {
-        syslog(LOG_ERR, "command %s error !\n", write_buffer);
-        goto cleanup;
-    };
+        memset(write_buffer, 0, sizeof(write_buffer));
+        sprintf(write_buffer, "%s", "AT+CGACT=1,1\r\n");
+        tcflush(fd, TCOFLUSH);
+        size = write(fd, write_buffer, strlen(write_buffer));
+        syslog(LOG_DEBUG, "write %s %d\n", write_buffer, size);
+        sleep(5);
+        memset(read_buffer, 0, sizeof(read_buffer));
+        size = read(fd, read_buffer, sizeof(read_buffer));
+        syslog(LOG_DEBUG, "read %d [%s]\n", size, read_buffer);
+        if (NULL == strstr(read_buffer, "OK"))
+        {
+            if (repeat_count > 3)
+            {
+                syslog(LOG_ERR, "command %s error !\n", write_buffer);
+                goto cleanup;
+            }
+            else
+            {
+                syslog(LOG_WARNING, "command %s error Retry!\n", write_buffer);
+            }
+        }
+        else
+        {
+            // OKay
+            break;
+        };
+        repeat_count++;
+        sleep(1);
+    }
 
     // +ZGIPDNS:
     // 1,1,"IP","10.101.206.237","0.0.0.0","116.116.116.116","221.5.88.88"
@@ -616,9 +641,22 @@ static int www_connect()
             goto cleanup;
         }
 
+       // Get current system status
+        statRootFs.f_bsize = 0;
+		statRootFs.f_bavail = 0;
+		statVarFs.f_bsize = 0;
+		statVarFs.f_bavail = 0;
+		statvfs("/", &statRootFs);
+		statvfs("/var/log/syslog", &statVarFs);
+  
+       fileSt.st_size = 0;
+        stat("/var/log/syslog", &fileSt);
         sysinfo(&info);
-        snprintf(mqtt_message, sizeof(mqtt_message), "IP=%s;UP=%lu", ipaddress,
-                 info.uptime);
+        snprintf(mqtt_message, sizeof(mqtt_message),
+                 "IP=%s;UP=%lu;LOADS=%lu-%lu-%lu;TOTAL=%lu;FREE=%lu;PROCS=%d;LOG=%lu;FS=%llu-%llu;VER=%s", ipaddress, info.uptime,
+                 info.loads[0], info.loads[1], info.loads[2], info.totalram, info.freeram, info.procs, fileSt.st_size, 
+                 (uint64_t)statRootFs.f_bsize * (uint64_t)statRootFs.f_bavail, 
+                 (uint64_t)statVarFs.f_bsize * (uint64_t)statVarFs.f_bavail, versionString);
         // syslog(LOG_NOTICE, "mqtt_message=%s hostname=%s\n", mqtt_message,
         // hostname);
 
@@ -630,6 +668,10 @@ static int www_connect()
                  timeinfo->tm_year + 1900, timeinfo->tm_mon + 1,
                  timeinfo->tm_mday, timeinfo->tm_hour, timeinfo->tm_min,
                  timeinfo->tm_sec);
+
+        // the message published to server
+        // 9999-2019-03-10 10:58:28 IP=10.82.186.238;UP=5842;VER=Mar  9
+        // 2019-14:24:28
 
         ret = mqtt_publish_message(mqtt_topic, mqtt_message);
         if (ret)
@@ -857,7 +899,11 @@ int main()
 
     openlog("4GConnect", LOG_CONS | LOG_PID | LOG_NDELAY, LOG_LOCAL1);
 
-    syslog(LOG_INFO, "INFO Built on %s %s", __DATE__, __TIME__);
+    // printf("%04d-%02d-%02dT%02d:%02d:%02d\n", BUILD_YEAR, BUILD_MONTH,
+    // BUILD_DAY, BUILD_HOUR, BUILD_MIN, BUILD_SEC);
+
+    sprintf(versionString, "%04d%02d%02d", BUILD_YEAR, BUILD_MONTH, BUILD_DAY);
+    syslog(LOG_INFO, "INFO Built on %s", versionString);
     syslog(LOG_DEBUG, "DEBUG Built on %s %s", __DATE__, __TIME__);
     syslog(LOG_ERR, "ERR Built on %s %s", __DATE__, __TIME__);
 
